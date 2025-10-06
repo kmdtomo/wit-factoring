@@ -1,24 +1,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import axios from "axios";
-import { ImageAnnotatorClient } from '@google-cloud/vision';
-import path from 'path';
-
-// Google Cloud認証設定
-let visionClient: ImageAnnotatorClient;
-
-if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
-  // JSON文字列から認証情報を読み込む（本番環境用）
-  const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
-  visionClient = new ImageAnnotatorClient({ credentials });
-} else {
-  // ファイルパスから読み込む（ローカル環境用）
-  const authPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  if (authPath && !path.isAbsolute(authPath)) {
-    process.env.GOOGLE_APPLICATION_CREDENTIALS = path.resolve(process.cwd(), authPath);
-  }
-  visionClient = new ImageAnnotatorClient();
-}
+import { annotateImage, batchAnnotateFiles } from '../lib/google-vision-rest';
 
 // 環境変数は実行時に取得するように変更
 const getKintoneConfig = () => ({
@@ -162,18 +145,7 @@ export const googleVisionBankStatementOcrToolImproved = createTool({
             // ページ数確認
             let actualPageCount = 0;
             try {
-              const testRequest = {
-                requests: [{
-                  inputConfig: {
-                    content: base64Content,
-                    mimeType: 'application/pdf',
-                  },
-                  features: [{ type: 'DOCUMENT_TEXT_DETECTION' as const }],
-                  pages: [1],
-                }],
-              };
-              
-              const [testResult] = await visionClient.batchAnnotateFiles(testRequest);
+              const testResult = await batchAnnotateFiles(base64Content, 'application/pdf', [1]);
               actualPageCount = testResult.responses?.[0]?.totalPages || maxPagesPerFile;
               console.log(`[${documentType}] PDFの総ページ数: ${actualPageCount}ページ`);
             } catch (error: any) {
@@ -199,26 +171,9 @@ export const googleVisionBankStatementOcrToolImproved = createTool({
               );
               
               console.log(`  バッチ${batch + 1}/${numBatches}: ページ${startPage}-${endPage}...`);
-              
+
               try {
-                const request = {
-                  requests: [{
-                    inputConfig: {
-                      content: base64Content,
-                      mimeType: 'application/pdf',
-                    },
-                    features: [
-                      { type: 'DOCUMENT_TEXT_DETECTION' as const },  // メインのテキスト検出
-                      { type: 'TEXT_DETECTION' as const },            // 補助的なテキスト検出
-                    ],
-                    pages: pagesToProcessInBatch,
-                    imageContext: {
-                      languageHints: ['ja'],  // 日本語ヒント
-                    },
-                  }],
-                };
-                
-                const [result] = await visionClient.batchAnnotateFiles(request);
+                const result = await batchAnnotateFiles(base64Content, 'application/pdf', pagesToProcessInBatch);
                 
                 if (result.responses?.[0]) {
                   const response = result.responses[0];
@@ -309,15 +264,8 @@ export const googleVisionBankStatementOcrToolImproved = createTool({
           } else {
             // 画像ファイルの処理（改善版）
             try {
-              const [result] = await visionClient.documentTextDetection({
-                image: {
-                  content: base64Content,
-                },
-                imageContext: {
-                  languageHints: ['ja'],
-                },
-              });
-              
+              const result = await annotateImage(base64Content);
+
               const fullTextAnnotation = result.fullTextAnnotation;
               const textAnnotations = result.textAnnotations || [];
               

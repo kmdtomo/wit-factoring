@@ -1,29 +1,9 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import axios from "axios";
-import { ImageAnnotatorClient } from '@google-cloud/vision';
-import path from 'path';
 import { generateObject } from 'ai';
 import { openai } from '@ai-sdk/openai';
-
-// 環境変数の認証ファイルパスが相対パスの場合、絶対パスに変換
-// Google Cloud認証設定
-let visionClient: ImageAnnotatorClient;
-
-if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
-  // JSON文字列から認証情報を読み込む（本番環境用）
-  const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
-  visionClient = new ImageAnnotatorClient({ credentials });
-  // GOOGLE_APPLICATION_CREDENTIALSを削除してファイルパスとして誤認識されないようにする
-  delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
-} else {
-  // ファイルパスから読み込む（ローカル環境用）
-  const authPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  if (authPath && !path.isAbsolute(authPath)) {
-    process.env.GOOGLE_APPLICATION_CREDENTIALS = path.resolve(process.cwd(), authPath);
-  }
-  visionClient = new ImageAnnotatorClient();
-}
+import { annotateImage, batchAnnotateFiles } from '../lib/google-vision-rest';
 
 // 環境変数は実行時に取得するように変更
 const getKintoneConfig = () => ({
@@ -180,18 +160,7 @@ export const googleVisionPurchaseCollateralOcrTool = createTool({
             
             try {
               // 1ページ目のみで試してPDFが読めるか確認
-              const testRequest = {
-                requests: [{
-                  inputConfig: {
-                    content: base64Content,
-                    mimeType: 'application/pdf',
-                  },
-                  features: [{ type: 'DOCUMENT_TEXT_DETECTION' as const }],
-                  pages: [1],
-                }],
-              };
-              
-              const [testResult] = await visionClient.batchAnnotateFiles(testRequest);
+              const testResult = await batchAnnotateFiles(base64Content, 'application/pdf', [1]);
               
               if (testResult.responses?.[0]?.totalPages) {
                 actualPageCount = testResult.responses[0].totalPages;
@@ -201,17 +170,7 @@ export const googleVisionPurchaseCollateralOcrTool = createTool({
                 console.log(`[${documentType}] ページ数を段階的に確認中...`);
                 for (let testPage = 1; testPage <= maxPagesPerFile; testPage += 10) {
                   try {
-                    const pageTestRequest = {
-                      requests: [{
-                        inputConfig: {
-                          content: base64Content,
-                          mimeType: 'application/pdf',
-                        },
-                        features: [{ type: 'DOCUMENT_TEXT_DETECTION' as const }],
-                        pages: [testPage],
-                      }],
-                    };
-                    await visionClient.batchAnnotateFiles(pageTestRequest);
+                    await batchAnnotateFiles(base64Content, 'application/pdf', [testPage]);
                     actualPageCount = testPage;
                   } catch (e: any) {
                     if (e.message?.includes('Invalid pages')) {
@@ -224,17 +183,7 @@ export const googleVisionPurchaseCollateralOcrTool = createTool({
                   for (let testPage = actualPageCount - 9; testPage <= actualPageCount + 10; testPage++) {
                     if (testPage < 1) continue;
                     try {
-                      const pageTestRequest = {
-                        requests: [{
-                          inputConfig: {
-                            content: base64Content,
-                            mimeType: 'application/pdf',
-                          },
-                          features: [{ type: 'DOCUMENT_TEXT_DETECTION' as const }],
-                          pages: [testPage],
-                        }],
-                      };
-                      await visionClient.batchAnnotateFiles(pageTestRequest);
+                      await batchAnnotateFiles(base64Content, 'application/pdf', [testPage]);
                       actualPageCount = testPage;
                     } catch (e: any) {
                       if (e.message?.includes('Invalid pages')) {
@@ -277,24 +226,9 @@ export const googleVisionPurchaseCollateralOcrTool = createTool({
               );
               
               console.log(`  バッチ${batch + 1}/${numBatches}: ページ${startPage}-${endPage}を処理中...`);
-              
+
               try {
-                const request = {
-                  requests: [{
-                    inputConfig: {
-                      content: base64Content,
-                      mimeType: 'application/pdf',
-                    },
-                    features: [
-                      { type: 'DOCUMENT_TEXT_DETECTION' as const }, // fullTextAnnotation用
-                      { type: 'TEXT_DETECTION' as const },          // textAnnotations用（マーカー対応）
-                    ],
-                    pages: pagesToProcessInBatch,
-                    imageContext: { languageHints: ['ja'] }, // 日本語OCR精度向上
-                  }],
-                };
-                
-                const [result] = await visionClient.batchAnnotateFiles(request);
+                const result = await batchAnnotateFiles(base64Content, 'application/pdf', pagesToProcessInBatch);
                 
                 if (result.responses?.[0]) {
                   const response = result.responses[0];
@@ -375,16 +309,7 @@ export const googleVisionPurchaseCollateralOcrTool = createTool({
           } else {
             // 画像ファイルの処理
             try {
-              const [result] = await visionClient.annotateImage({
-                image: {
-                  content: base64Content,
-                },
-                features: [
-                  { type: 'DOCUMENT_TEXT_DETECTION' }, // fullTextAnnotation用
-                  { type: 'TEXT_DETECTION' },          // textAnnotations用（マーカー対応）
-                ],
-                imageContext: { languageHints: ['ja'] }, // 日本語OCR精度向上
-              });
+              const result = await annotateImage(base64Content);
               
               const texts: string[] = [];
               

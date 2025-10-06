@@ -1,7 +1,7 @@
 import { Mastra } from '@mastra/core';
 import { kintoneFetchTool } from './tools/kintone-fetch-tool';
-// Google Vision APIツールは@grpc/grpc-jsの問題でビルドできないため一時的にコメントアウト
-// import { googleVisionPurchaseCollateralOcrTool } from './tools/google-vision-purchase-collateral-ocr-tool';
+// Google Vision APIツールはCloud Functions経由で呼び出すため@grpc/grpc-js不要
+import { googleVisionPurchaseCollateralOcrTool } from './tools/google-vision-purchase-collateral-ocr-tool';
 import { purchaseVerificationToolMinimal } from './tools/purchase-verification-tool-minimal';
 import { collateralVerificationTool } from './tools/collateral-verification-tool';
 // import { googleVisionBankStatementOcrToolImproved } from './tools/google-vision-bank-statement-ocr-tool-improved';
@@ -16,7 +16,7 @@ export const mastra = new Mastra({
   name: 'wit-factoring',
   tools: {
     kintoneFetchTool,
-    // googleVisionPurchaseCollateralOcrTool,
+    googleVisionPurchaseCollateralOcrTool,
     purchaseVerificationToolMinimal,
     collateralVerificationTool,
     // googleVisionBankStatementOcrToolImproved,

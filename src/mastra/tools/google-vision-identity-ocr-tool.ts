@@ -1,24 +1,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import axios from "axios";
-import { ImageAnnotatorClient } from '@google-cloud/vision';
-import path from 'path';
-
-// Google Cloud認証設定
-let visionClient: ImageAnnotatorClient;
-
-if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
-  // JSON文字列から認証情報を読み込む（本番環境用）
-  const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
-  visionClient = new ImageAnnotatorClient({ credentials });
-} else {
-  // ファイルパスから読み込む（ローカル環境用）
-  const authPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  if (authPath && !path.isAbsolute(authPath)) {
-    process.env.GOOGLE_APPLICATION_CREDENTIALS = path.resolve(process.cwd(), authPath);
-  }
-  visionClient = new ImageAnnotatorClient();
-}
+import { annotateImage } from '../lib/google-vision-rest';
 
 // 環境変数は実行時に取得するように変更
 const getKintoneConfig = () => ({
@@ -135,12 +118,11 @@ export const googleVisionIdentityOcrTool = createTool({
           });
           
           const fileBuffer = Buffer.from(fileResponse.data);
-          
+          const base64Content = fileBuffer.toString('base64');
+
           // Google Vision APIでOCR処理
-          const [result] = await visionClient.documentTextDetection({
-            image: { content: fileBuffer },
-          });
-          
+          const result = await annotateImage(base64Content);
+
           const fullTextAnnotation = result.fullTextAnnotation;
           const text = fullTextAnnotation?.text || "";
           const confidence = fullTextAnnotation?.pages?.[0]?.confidence || 0;
