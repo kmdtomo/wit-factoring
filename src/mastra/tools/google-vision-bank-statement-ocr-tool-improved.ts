@@ -146,7 +146,7 @@ export const googleVisionBankStatementOcrToolImproved = createTool({
             let actualPageCount = 0;
             try {
               const testResult = await batchAnnotateFiles(base64Content, 'application/pdf', [1]);
-              actualPageCount = testResult.responses?.[0]?.totalPages || maxPagesPerFile;
+              actualPageCount = testResult.totalPages || maxPagesPerFile;
               console.log(`[${documentType}] PDFの総ページ数: ${actualPageCount}ページ`);
             } catch (error: any) {
               console.error(`[${documentType}] ページ数確認エラー:`, error.message);
@@ -174,10 +174,9 @@ export const googleVisionBankStatementOcrToolImproved = createTool({
 
               try {
                 const result = await batchAnnotateFiles(base64Content, 'application/pdf', pagesToProcessInBatch);
-                
-                if (result.responses?.[0]) {
-                  const response = result.responses[0];
-                  const pages = response.responses || [];
+
+                if (result.responses) {
+                  const pages = result.responses || [];
                   
                   console.log(`    [DEBUG] バッチ${batch + 1}: ${pages.length}ページのレスポンス取得`);
                   
