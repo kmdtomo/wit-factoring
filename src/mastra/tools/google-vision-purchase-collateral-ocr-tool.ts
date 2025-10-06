@@ -161,9 +161,9 @@ export const googleVisionPurchaseCollateralOcrTool = createTool({
             try {
               // 1ページ目のみで試してPDFが読めるか確認
               const testResult = await batchAnnotateFiles(base64Content, 'application/pdf', [1]);
-              
-              if (testResult.responses?.[0]?.totalPages) {
-                actualPageCount = testResult.responses[0].totalPages;
+
+              if (testResult.totalPages) {
+                actualPageCount = testResult.totalPages;
                 console.log(`[${documentType}] PDFの総ページ数: ${actualPageCount}ページ`);
               } else {
                 // totalPagesが取得できない場合は、段階的に確認
@@ -229,10 +229,9 @@ export const googleVisionPurchaseCollateralOcrTool = createTool({
 
               try {
                 const result = await batchAnnotateFiles(base64Content, 'application/pdf', pagesToProcessInBatch);
-                
-                if (result.responses?.[0]) {
-                  const response = result.responses[0];
-                  const pages = response.responses || [];
+
+                if (result.responses) {
+                  const pages = result.responses || [];
                   
                   // 各ページのテキストを抽出
                   const pageTextList: string[] = [];
@@ -370,7 +369,7 @@ export const googleVisionPurchaseCollateralOcrTool = createTool({
           // 汎用的なスキーマ：何が入っていたかの事実を記録
           const schema = z.object({
             documentType: z.string().describe("文書種別（請求書、登記情報、債権譲渡概要、名刺、契約書など、文書に記載されている内容から自由に判定）"),
-            extractedFacts: z.record(z.any()).describe("抽出された事実情報（会社名、資本金、設立年月日、代表者名、請求額、期日など、文書から読み取れる情報を柔軟に記録。ネスト構造も可能）"),
+            extractedFacts: z.record(z.any()).default({}).describe("抽出された事実情報（会社名、資本金、設立年月日、代表者名、請求額、期日など、文書から読み取れる情報を柔軟に記録。ネスト構造も可能）"),
           });
 
           const result = await generateObject({

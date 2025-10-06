@@ -1,5 +1,6 @@
 import axios from 'axios';
 import jwt from 'jsonwebtoken';
+import { readFileSync } from 'fs';
 
 // Google Vision REST APIのヘルパー
 
@@ -8,10 +9,15 @@ import jwt from 'jsonwebtoken';
  */
 async function getAccessToken(): Promise<string> {
   // 環境変数から認証情報を取得
-  const credentialsJson = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
+  let credentialsJson = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
 
+  // JSON文字列がない場合、ファイルパスから読み込む
   if (!credentialsJson) {
-    throw new Error('GOOGLE_APPLICATION_CREDENTIALS_JSON環境変数が設定されていません');
+    const credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    if (!credentialsPath) {
+      throw new Error('GOOGLE_APPLICATION_CREDENTIALS_JSON または GOOGLE_APPLICATION_CREDENTIALS 環境変数が設定されていません');
+    }
+    credentialsJson = readFileSync(credentialsPath, 'utf-8');
   }
 
   const credentials = JSON.parse(credentialsJson);
