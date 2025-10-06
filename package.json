@@ -19,7 +19,6 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^2.0.23",
     "@ai-sdk/openai": "^2.0.42",
-    "@google-cloud/vision": "^5.3.3",
     "@mastra/core": "^0.20.0",
     "@mastra/libsql": "^0.15.1",
     "@mastra/memory": "^0.15.5",
