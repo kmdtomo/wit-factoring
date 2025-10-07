@@ -81,10 +81,8 @@ export const phase1PurchaseCollateralStep = createStep({
       // OCR結果の詳細表示（文書種別ごとに分類）
       console.log(`\n━━━ OCR抽出結果（買取情報フィールド） ━━━`);
 
-      // 文書種別の判定を柔軟に（部分一致で判定）
-      const invoiceDocuments = ocrResult.purchaseDocuments.filter((doc: any) =>
-        doc.documentType?.includes("請求書") || doc.documentType?.includes("invoice")
-      );
+      // フィルタリングせず全ての買取情報ファイルを使用（AIが中身から判定）
+      const invoiceDocuments = ocrResult.purchaseDocuments;
       const registrationDocuments = ocrResult.purchaseDocuments.filter((doc: any) =>
         doc.documentType?.includes("登記") || doc.documentType?.includes("registration")
       );
@@ -157,35 +155,43 @@ export const phase1PurchaseCollateralStep = createStep({
       console.log(`\n[Phase 1 - Step 2/3] 買取検証開始`);
       
       // 請求書ファイルがない場合の処理
+      let purchaseResult: any;
+      let purchaseDuration = 0;
+
       if (invoiceDocuments.length === 0) {
         console.log(`\n━━━ 買取検証 ━━━`);
         console.log(`\n⚠️  買取請求書ファイルなし（検証スキップ）`);
         console.log(`━━━━━━━━━━━━━━━━━━━━━━\n`);
-        
-        throw new Error(`買取請求書ファイルが見つかりません。処理を中断します。`);
-      }
-      
-      const purchaseStartTime = Date.now();
-      
-      const purchaseResult = await purchaseVerificationToolMinimal.execute!({
-        context: {
-          recordId,
-          purchaseDocuments: invoiceDocuments, // 請求書のみを渡す
-          model: "gemini-2.5-flash-lite",
-        },
-        runtimeContext: new RuntimeContext(),
-      });
-      
-      const purchaseDuration = Date.now() - purchaseStartTime;
-      console.log(`[Phase 1 - Step 2/3] 買取検証完了 - 処理時間: ${purchaseDuration}ms`);
-      
-      // 買取検証結果の詳細表示
-      console.log(`\n━━━ 買取検証 ━━━`);
-      console.log(`  判定: ${purchaseResult.verificationResult}`);
-      console.log(`━━━━━━━━━━━━━━━━━━━━━━\n`);
-      
-      if (!purchaseResult.success) {
-        throw new Error(`買取検証失敗: ${purchaseResult.verificationResult}`);
+
+        // エラーではなく、デフォルト値で続行
+        purchaseResult = {
+          success: true,
+          verificationResult: "検証不可（買取請求書ファイルなし）",
+        };
+      } else {
+        const purchaseStartTime = Date.now();
+
+        purchaseResult = await purchaseVerificationToolMinimal.execute!({
+          context: {
+            recordId,
+            purchaseDocuments: invoiceDocuments, // 請求書のみを渡す
+            model: "gemini-2.5-flash-lite",
+          },
+          runtimeContext: new RuntimeContext(),
+        });
+
+        purchaseDuration = Date.now() - purchaseStartTime;
+        console.log(`[Phase 1 - Step 2/3] 買取検証完了 - 処理時間: ${purchaseDuration}ms`);
+
+        // 買取検証結果の詳細表示
+        console.log(`\n━━━ 買取検証 ━━━`);
+        console.log(`  判定: ${purchaseResult.verificationResult}`);
+        console.log(`━━━━━━━━━━━━━━━━━━━━━━\n`);
+
+        if (!purchaseResult.success) {
+          console.warn(`⚠️  買取検証失敗: ${purchaseResult.verificationResult}`);
+          purchaseResult.verificationResult = "不一致";
+        }
       }
       
       // ========================================

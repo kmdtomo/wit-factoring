@@ -56,6 +56,7 @@ export const phase3VerificationStep = createStep({
         詐欺情報サイト: z.number(),
         Web検索: z.number(),
         詳細: z.string(),
+        URL: z.string().optional().describe("ネガティブ情報が見つかった場合のURL"),
       }),
       企業実在性: z.object({
         申込企業: z.object({
@@ -531,11 +532,28 @@ export const phase3VerificationStep = createStep({
     };
 
     // 申込者エゴサーチのサマリー
+    // ネガティブ情報が見つかった場合、最初のURLを取得
+    let negativeURL: string | undefined = undefined;
+    if (applicantEgoSearch.summary.hasNegativeInfo) {
+      // 詐欺サイトのURLを優先
+      const fraudSiteWithURL = applicantEgoSearch.fraudSiteResults.find((r: any) => r.found && r.url);
+      if (fraudSiteWithURL) {
+        negativeURL = fraudSiteWithURL.url;
+      } else {
+        // Web検索結果のURLを取得
+        const negativeSearch = applicantEgoSearch.negativeSearchResults.find((r: any) => r.found && r.results && r.results.length > 0);
+        if (negativeSearch) {
+          negativeURL = negativeSearch.results[0].url;
+        }
+      }
+    }
+
     const 申込者エゴサーチサマリー = {
       ネガティブ情報: applicantEgoSearch.summary.hasNegativeInfo,
       詐欺情報サイト: applicantEgoSearch.summary.fraudHits,
       Web検索: applicantEgoSearch.negativeSearchResults.filter((r: any) => r.found).length,
       詳細: applicantEgoSearch.summary.details,
+      URL: negativeURL,
     };
     
     // 企業実在性のサマリー
@@ -622,9 +640,7 @@ async function analyzeSearchResultsRelevance(
   try {
     const result = await generateObject({
       model: google("gemini-2.5-flash-lite"),
-      prompt: `以下のWeb検索結果を分析し、
-「${name}」に関する詐欺・被害・逮捕・容疑の情報が
-本当に含まれているか、各結果について判定してください。
+      prompt: `以下のWeb検索結果を分析し、「${name}」本人が犯罪・不正の対象者として扱われているかを判定してください。
 
 検索クエリ: "${query}"
 
@@ -635,10 +651,10 @@ ${i}. タイトル: ${r.title}
 `).join('\n')}
 
 判定基準:
-- 本人が詐欺・被害・逮捕・容疑に関わっている場合: true
-- 単に名前が含まれているだけの無関係な記事: false
-- 記念日、スポーツ、文化活動などの記事: false
-- PDFファイル名やメタデータのみの場合: false
+- 「${name}」本人が容疑者・被告・加害者として扱われている → true
+- 「${name}」が専門家・警察官・第三者として言及されているだけ → false
+- 同姓同名の別人 → false
+- 無関係な記事 → false
 
 各検索結果についてJSON形式で返してください。`,
       schema: z.object({
