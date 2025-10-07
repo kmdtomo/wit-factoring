@@ -2,9 +2,13 @@ import { createStep } from "@mastra/core/workflows";
 import { RuntimeContext } from "@mastra/core/runtime-context";
 import { z } from "zod";
 import { googleVisionBankStatementOcrToolImproved } from "../tools/google-vision-bank-statement-ocr-tool-improved";
-import { openai } from "@ai-sdk/openai";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { generateObject } from "ai";
 import axios from "axios";
+
+const google = createGoogleGenerativeAI({
+  apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+});
 
 // 環境変数取得
 const getEnvConfig = () => ({
@@ -51,17 +55,6 @@ export const phase2BankStatementStep = createStep({
             destination: z.string(),
             keyword: z.string(),
           })),
-          largeCashWithdrawals: z.array(z.object({
-            date: z.string(),
-            amount: z.number(),
-            destination: z.string(),
-          })),
-          fundTransfers: z.array(z.object({
-            date: z.string(),
-            amount: z.number(),
-            from: z.string(),
-            to: z.string(),
-          })),
         }),
       }).optional(),
       subBankAnalysis: z.object({
@@ -71,11 +64,6 @@ export const phase2BankStatementStep = createStep({
             amount: z.number(),
             destination: z.string(),
             keyword: z.string(),
-          })),
-          largeCashWithdrawals: z.array(z.object({
-            date: z.string(),
-            amount: z.number(),
-            destination: z.string(),
           })),
         }),
       }).optional(),
@@ -240,18 +228,17 @@ export const phase2BankStatementStep = createStep({
       // ギャンブル関連キーワードリスト（全体スコープで定義）
       const gamblingKeywords = [
         // パチンコ・スロット店
-        "パチンコ", "スロット", "マルハン", "ダイナム", "ガイア", "GAIA", "エスパス",
+        "マルハン", "ダイナム", "ガイア", "GAIA", "エスパス",
         // 競馬
-        "競馬", "ウィンチケット", "WINTICKET", "SPAT4", "スパット", "楽天競馬", "オッズパーク",
-        "JRA", "地方競馬", "中央競馬",
+        "ウィンチケット", "WINTICKET", "SPAT4", "スパット", "楽天競馬", "オッズパーク",
+        "JRA",
         // 競輪・競艇・オートレース
-        "競輪", "競艇", "ボートレース", "テレボート", "オートレース", "BOAT RACE",
+        "競艇", "テレボート", "オートレース", "BOAT RACE",
         // カジノ・オンラインカジノ
-        "カジノ", "ベラジョン", "カジ旅", "エルドアカジノ", "ビットカジノ",
+        "ベラジョン", "カジ旅", "エルドアカジノ", "ビットカジノ",
         // 宝くじ
-        "宝くじ", "ロト", "LOTO", "ナンバーズ", "NUMBERS", "ジャンボ",
-        // その他
-        "賭博", "賭け事", "ギャンブル"
+         "ロト", "LOTO", "ナンバーズ", "NUMBERS", "ジャンボ",
+
       ];
 
       // ========================================
@@ -259,7 +246,8 @@ export const phase2BankStatementStep = createStep({
       // ========================================
       let mainBankAnalysis: any = null;
       let mainBankAICost = 0;
-      
+      let collaterals: any[] = []; // 担保企業リスト（統合分析で使用）
+
       if (ocrResult.mainBankDocuments.length > 0) {
         console.log(`\n[Phase 2 - Step 2/4] メイン通帳AI分析開始`);
         const mainBankStartTime = Date.now();
@@ -286,7 +274,7 @@ export const phase2BankStatementStep = createStep({
           return `${date.getFullYear()}年${date.getMonth() + 1}月`;
         };
         
-        const collaterals = collateralInfo.map((item: any) => ({
+        collaterals = collateralInfo.map((item: any) => ({
           会社名: item.value?.会社名_第三債務者_担保?.value || "",
           先々月: Number(item.value?.過去の入金_先々月?.value || 0),
           先月: Number(item.value?.過去の入金_先月?.value || 0),
@@ -311,11 +299,17 @@ ${collaterals.map((c: any, idx: number) =>
   `${idx + 1}. ${c.会社名}: ${getMonthName(2)}=¥${c.先々月.toLocaleString()}, ${getMonthName(1)}=¥${c.先月.toLocaleString()}, ${getMonthName(0)}=¥${c.今月.toLocaleString()}`
 ).join('\n')}
 
-# 他社ファクタリング業者リスト
-${factoringCompanies.join(', ')}
+# ========================================
+# 【重要】他社ファクタリング業者リスト（110社）
+# このリストに記載された業者のみ検出対象
+# ========================================
+${factoringCompanies.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
-# ギャンブル関連キーワード
-${gamblingKeywords.join(', ')}
+# ========================================
+# 【重要】ギャンブル関連キーワード
+# このリストに記載されたキーワードのみ検出対象
+# ========================================
+${gamblingKeywords.map((k, i) => `${i + 1}. ${k}`).join('\n')}
 
 # タスク
 1. 全取引を抽出（日付、金額、振込元/先、摘要。入金=プラス、出金=マイナス）
@@ -424,15 +418,14 @@ ${gamblingKeywords.join(', ')}
    }
 
 4. ギャンブルリスク検出
-   - **重要**: 上記キーワードリストに完全に一致する出金取引のみを抽出
-   - 振込先/摘要にキーワードが含まれている場合のみ検出
-   - 一致したキーワードを必ず keyword フィールドに記載
-   - キーワードに一致しない取引は絶対に含めないこと
-   - 金額は問わず、キーワード一致のものを全て記録
+   - 振込先/摘要の文字列に、上記キーワードリストのいずれかが含まれている出金取引のみ検出
+   - 含まれていない場合は検出しない
 
 5. 他社ファクタリング業者検出
-   - リストの業者名を含む取引（入金または出金）を全て抽出
-   - 企業名の表記ゆれを考慮
+   - 振込元/振込先名に、上記業者リストのいずれかが含まれている取引のみ検出
+   - 含まれていない場合は検出しない
+   - 除外: 「セゾン」「アメックス」「SMBC」はクレジットカード会社・銀行のため検出しない
+
 
 JSON形式で出力してください。`;
         
@@ -481,7 +474,7 @@ JSON形式で出力してください。`;
               date: z.string(),
               amount: z.number(),
               destination: z.string(),
-              keyword: z.string().min(1).describe("一致したギャンブルキーワード（必須・空文字列不可）"),
+              keyword: z.enum(gamblingKeywords as [string, ...string[]]).describe("上記ギャンブルキーワードリストから選択（リストにない場合は出力しない）"),
             })),
           }),
           factoringCompaniesDetected: z.array(z.object({
@@ -494,7 +487,7 @@ JSON形式で出力してください。`;
         });
         
         const result = await generateObject({
-          model: openai("gpt-4.1-2025-04-14"),
+          model: google("gemini-2.5-flash-lite"),
           prompt: analysisPrompt,
           schema,
         });
@@ -519,13 +512,13 @@ JSON形式で出力してください。`;
         for (const match of mainBankAnalysis.collateralMatches) {
           console.log(`【企業: ${match.company}】`);
 
-          // 全取引の表示
-          if (match.allTransactions && match.allTransactions.length > 0) {
-            console.log(`\n  📋 OCRから抽出された全入金取引（${match.allTransactions.length}件）:`);
-            match.allTransactions.forEach((tx: any, idx: number) => {
-              console.log(`     ${idx + 1}. ${tx.date}: ¥${tx.amount.toLocaleString()} ← 「${tx.payerName}」`);
-            });
-          }
+          // 全取引の表示（ログをすっきりさせるため削除）
+          // if (match.allTransactions && match.allTransactions.length > 0) {
+          //   console.log(`\n  📋 OCRから抽出された全入金取引（${match.allTransactions.length}件）:`);
+          //   match.allTransactions.forEach((tx: any, idx: number) => {
+          //     console.log(`     ${idx + 1}. ${tx.date}: ¥${tx.amount.toLocaleString()} ← 「${tx.payerName}」`);
+          //   });
+          // }
 
           // 期待値の表示
           if (match.expectedValues && match.expectedValues.length > 0) {
@@ -563,14 +556,14 @@ JSON形式で出力してください。`;
               }
             }
 
-            // 期待値と照合できなかった取引
-            if (month.unmatchedTransactions && month.unmatchedTransactions.length > 0) {
-              console.log(`        ⚠️ 期待値外の取引（別案件の可能性）:`);
-              month.unmatchedTransactions.forEach((tx: any, txIdx: number) => {
-                const purposeText = tx.purpose ? ` - ${tx.purpose}` : '';
-                console.log(`          - ${tx.date}: ¥${tx.amount.toLocaleString()} ← 「${tx.payerName}」${purposeText}`);
-              });
-            }
+            // 期待値と照合できなかった取引（表示を削除してログをすっきりさせる）
+            // if (month.unmatchedTransactions && month.unmatchedTransactions.length > 0) {
+            //   console.log(`        ⚠️ 期待値外の取引（別案件の可能性）:`);
+            //   month.unmatchedTransactions.forEach((tx: any, txIdx: number) => {
+            //     const purposeText = tx.purpose ? ` - ${tx.purpose}` : '';
+            //     console.log(`          - ${tx.date}: ¥${tx.amount.toLocaleString()} ← 「${tx.payerName}」${purposeText}`);
+            //   });
+            // }
           });
           console.log();
         }
@@ -613,23 +606,29 @@ JSON形式で出力してください。`;
 # 通帳データ
 ${subBankText}
 
-# 他社ファクタリング業者リスト
-${factoringCompanies.join(', ')}
+# ========================================
+# 【重要】他社ファクタリング業者リスト（110社）
+# このリストに記載された業者のみ検出対象
+# ========================================
+${factoringCompanies.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
-# ギャンブル関連キーワード
-${gamblingKeywords.join(', ')}
+# ========================================
+# 【重要】ギャンブル関連キーワード
+# このリストに記載されたキーワードのみ検出対象
+# ========================================
+${gamblingKeywords.map((k, i) => `${i + 1}. ${k}`).join('\n')}
 
 # タスク
 1. 全取引を抽出（日付、金額、振込元/先、摘要。入金=プラス、出金=マイナス）
+
 2. ギャンブルリスク検出
-   - **重要**: 上記キーワードリストに完全に一致する出金取引のみを抽出
-   - 振込先/摘要にキーワードが含まれている場合のみ検出
-   - 一致したキーワードを必ず keyword フィールドに記載
-   - キーワードに一致しない取引は絶対に含めないこと
-   - 金額は問わず、キーワード一致のものを全て記録
+   - 振込先/摘要の文字列に、上記キーワードリストのいずれかが含まれている出金取引のみ検出
+   - 含まれていない場合は検出しない
+
 3. 他社ファクタリング業者検出
-   - リストの業者名を含む取引（入金または出金）を全て抽出
-   - 企業名の表記ゆれを考慮
+   - 振込元/振込先名に、上記業者リストのいずれかが含まれている取引のみ検出
+   - 含まれていない場合は検出しない
+   - 除外: 「セゾン」「アメックス」「SMBC」はクレジットカード会社・銀行のため検出しない
 
 JSON形式で出力してください。`;
 
@@ -639,7 +638,7 @@ JSON形式で出力してください。`;
               date: z.string(),
               amount: z.number(),
               destination: z.string(),
-              keyword: z.string().min(1).describe("一致したギャンブルキーワード（必須・空文字列不可）"),
+              keyword: z.enum(gamblingKeywords as [string, ...string[]]).describe("上記ギャンブルキーワードリストから選択（リストにない場合は出力しない）"),
             })),
           }),
           factoringCompaniesDetected: z.array(z.object({
@@ -652,7 +651,7 @@ JSON形式で出力してください。`;
         });
         
         const subResult = await generateObject({
-          model: openai("gpt-4.1-2025-04-14"),
+          model: google("gemini-2.5-flash-lite"),
           prompt: subAnalysisPrompt,
           schema: subSchema,
         });
@@ -699,12 +698,38 @@ JSON形式で出力してください。`;
       // 他社ファクタリング業者検出を統合
       const factoringCompaniesDetected: any[] = [];
 
+      // 担保企業名のリストを取得（誤検出を防ぐため）
+      const collateralCompanyNames = collaterals.map((c: any) => c.会社名);
+
+      // クレジットカード会社・銀行などの除外リスト
+      const excludedCompanies = ["セゾン", "アメックス", "SMBC", "JC", "IB", "AP", "RKS"];
+
       if (mainBankAnalysis && mainBankAnalysis.factoringCompaniesDetected) {
-        factoringCompaniesDetected.push(...mainBankAnalysis.factoringCompaniesDetected);
+        // 担保企業とクレジットカード会社・銀行を除外
+        const filtered = mainBankAnalysis.factoringCompaniesDetected.filter((f: any) => {
+          const isCollateral = collateralCompanyNames.some((name: string) =>
+            f.companyName.includes(name) || name.includes(f.companyName)
+          );
+          const isExcluded = excludedCompanies.some((excluded: string) =>
+            f.companyName.includes(excluded) || f.payerOrPayee.includes(excluded)
+          );
+          return !isCollateral && !isExcluded;
+        });
+        factoringCompaniesDetected.push(...filtered);
       }
 
       if (subBankAnalysis && subBankAnalysis.factoringCompaniesDetected) {
-        factoringCompaniesDetected.push(...subBankAnalysis.factoringCompaniesDetected);
+        // 担保企業とクレジットカード会社・銀行を除外
+        const filtered = subBankAnalysis.factoringCompaniesDetected.filter((f: any) => {
+          const isCollateral = collateralCompanyNames.some((name: string) =>
+            f.companyName.includes(name) || name.includes(f.companyName)
+          );
+          const isExcluded = excludedCompanies.some((excluded: string) =>
+            f.companyName.includes(excluded) || f.payerOrPayee.includes(excluded)
+          );
+          return !isCollateral && !isExcluded;
+        });
+        factoringCompaniesDetected.push(...filtered);
       }
 
       // 通帳間資金移動検出（メイン通帳とサブ通帳の両方がある場合のみ）

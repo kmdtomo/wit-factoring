@@ -1,9 +1,14 @@
 import { createStep } from "@mastra/core/workflows";
 import { RuntimeContext } from "@mastra/core/runtime-context";
 import { z } from "zod";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { googleVisionPurchaseCollateralOcrTool } from "../tools/google-vision-purchase-collateral-ocr-tool";
 import { purchaseVerificationToolMinimal } from "../tools/purchase-verification-tool-minimal";
 import { collateralVerificationTool } from "../tools/collateral-verification-tool";
+
+const google = createGoogleGenerativeAI({
+  apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+});
 
 /**
  * Phase 1: 買取・担保情報処理ステップ
@@ -166,7 +171,7 @@ export const phase1PurchaseCollateralStep = createStep({
         context: {
           recordId,
           purchaseDocuments: invoiceDocuments, // 請求書のみを渡す
-          model: "gpt-4o",
+          model: "gemini-2.5-flash-lite",
         },
         runtimeContext: new RuntimeContext(),
       });
@@ -193,7 +198,7 @@ export const phase1PurchaseCollateralStep = createStep({
         context: {
           recordId,
           collateralDocuments: ocrResult.collateralDocuments,
-          model: "gpt-4o",
+          model: "gemini-2.5-flash-lite",
         },
         runtimeContext: new RuntimeContext(),
       });

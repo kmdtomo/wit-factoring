@@ -1,8 +1,12 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import axios from "axios";
-import { openai } from "@ai-sdk/openai";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { generateText } from "ai";
+
+const google = createGoogleGenerativeAI({
+  apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+});
 
 // 環境変数から設定を取得する関数
 const getEnvConfig = () => ({
@@ -23,7 +27,7 @@ export const purchaseVerificationToolMinimal = createTool({
       pageCount: z.number(),
       confidence: z.number(),
     })).describe("Google Vision OCRで抽出した買取書類データ"),
-    model: z.string().optional().default("gpt-4o"),
+    model: z.string().optional().default("gemini-2.5-flash-lite"),
   }),
   
   outputSchema: z.object({
@@ -96,7 +100,7 @@ ${kintoneData.purchases.map((p: any) => `${p.company}: ¥${p.amount.toLocaleStri
       const startTime = Date.now();
       
       const result = await generateText({
-        model: openai(model),
+        model: google(model),
         prompt: analysisPrompt,
         temperature: 0,
       });

@@ -1,10 +1,14 @@
 import { createStep } from "@mastra/core/workflows";
 import { RuntimeContext } from "@mastra/core/runtime-context";
 import { z } from "zod";
-import { openai } from "@ai-sdk/openai";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { generateText } from "ai";
 import { kintonePhase4DataTool } from "../tools/kintone-phase4-data-tool";
 import { phase4PromptContent, phase4TemplateContent } from "./phase4-prompts";
+
+const google = createGoogleGenerativeAI({
+  apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+});
 
 /**
  * Phase 4: 審査レポート生成ステップ（新バージョン）
@@ -12,8 +16,8 @@ import { phase4PromptContent, phase4TemplateContent } from "./phase4-prompts";
  * 処理フロー:
  * 1. Kintoneデータ取得（全テーブル）
  * 2. プロンプト・テンプレート読み込み
- * 3. GPT-4.1による包括的レポート生成
- * 4. Markdownレポート出力
+ * 3. Gemini 2.5 Flashによる包括的レポート生成
+ * 4. HTMLレポート出力
  */
 export const phase4ReportGenerationStep = createStep({
   id: "phase4-report-generation",
@@ -137,12 +141,12 @@ export const phase4ReportGenerationStep = createStep({
       );
 
       console.log(`  📊 プロンプト総文字数: ${fullPrompt.length}文字`);
-      console.log(`  🤖 GPT-4.1にリクエスト中...`);
+      console.log(`  🤖 Gemini 2.5 Flashにリクエスト中...`);
 
       const aiStartTime = Date.now();
 
       const result = await generateText({
-        model: openai("gpt-4.1-2025-04-14"),
+        model: google("gemini-2.5-flash"),
         prompt: fullPrompt,
         temperature: 0.3,
       });
