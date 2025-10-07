@@ -97,12 +97,12 @@ export const phase4ReportGenerationStep = createStep({
       // ========================================
       console.log(`\n[Phase 4 - Step 2/4] プロンプト・テンプレート読み込み`);
 
-      // publicディレクトリから読み込み（Mastraがビルド時にコピーする）
-      const publicDir = path.join(process.cwd(), 'public');
-      const promptPath = path.join(publicDir, 'phase4-prompt-balanced.md');
-      const templatePath = path.join(publicDir, 'ideal-phase4-report-template.html');
+      // プロジェクトルートを取得（.mastra/outputから2階層上）
+      const projectRoot = path.resolve(process.cwd(), '..', '..');
+      const promptPath = path.join(projectRoot, 'docs', 'phase4-prompt-balanced.md');
+      const templatePath = path.join(projectRoot, 'docs', 'ideal-phase4-report-template.html');
 
-      console.log(`  📂 publicディレクトリ: ${publicDir}`);
+      console.log(`  📂 プロジェクトルート: ${projectRoot}`);
       console.log(`  📄 プロンプトパス: ${promptPath}`);
       console.log(`  📄 テンプレートパス: ${templatePath}`);
 
