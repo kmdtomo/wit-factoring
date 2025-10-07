@@ -4,8 +4,7 @@ import { z } from "zod";
 import { openai } from "@ai-sdk/openai";
 import { generateText } from "ai";
 import { kintonePhase4DataTool } from "../tools/kintone-phase4-data-tool";
-import fs from "fs";
-import path from "path";
+import { phase4PromptContent, phase4TemplateContent } from "./phase4-prompts";
 
 /**
  * Phase 4: 審査レポート生成ステップ（新バージョン）
@@ -102,39 +101,14 @@ export const phase4ReportGenerationStep = createStep({
       // ========================================
       console.log(`\n[Phase 4 - Step 2/4] プロンプト・テンプレート読み込み`);
 
-      // docsディレクトリから読み込み
-      console.log(`  🔍 [DEBUG] __dirname: ${__dirname}`);
-      console.log(`  🔍 [DEBUG] process.cwd(): ${process.cwd()}`);
-      console.log(`  🔍 [DEBUG] __filename: ${__filename}`);
+      // phase4-prompts.tsからインポート（ファイルシステムアクセス不要）
+      const promptContent = phase4PromptContent;
+      const templateContent = phase4TemplateContent;
 
-      // プロジェクトルートを取得（.mastra/output から2階層上）
-      const projectRoot = __dirname.includes('.mastra') 
-        ? path.join(__dirname, '../..') 
-        : process.cwd();
-      
-      const docsDir = path.join(projectRoot, 'docs');
-      const promptPath = path.join(docsDir, 'phase4-prompt-compact.md');
-      const templatePath = path.join(docsDir, 'ideal-phase4-report-template-compact.html');
-
-      console.log(`  📂 カレントディレクトリ: ${process.cwd()}`);
-      console.log(`  📂 docsディレクトリ: ${docsDir}`);
-      console.log(`  📄 プロンプトパス: ${promptPath}`);
-      console.log(`  📄 テンプレートパス: ${templatePath}`);
-      console.log(`  🔍 [DEBUG] promptPath exists: ${fs.existsSync(promptPath)}`);
-      console.log(`  🔍 [DEBUG] templatePath exists: ${fs.existsSync(templatePath)}`);
-
-      if (!fs.existsSync(promptPath)) {
-        throw new Error(`プロンプトファイルが見つかりません: ${promptPath}`);
-      }
-      if (!fs.existsSync(templatePath)) {
-        throw new Error(`テンプレートファイルが見つかりません: ${templatePath}`);
-      }
-
-      const promptContent = fs.readFileSync(promptPath, 'utf-8');
-      const templateContent = fs.readFileSync(templatePath, 'utf-8');
-
-      console.log(`  ✅ プロンプト読み込み完了: ${promptContent.length}文字`);
-      console.log(`  ✅ テンプレート読み込み完了: ${templateContent.length}文字`);
+      const totalLength = promptContent.length + templateContent.length;
+      console.log(`  ✅ 埋め込みプロンプト+テンプレート読み込み完了: ${totalLength}文字 (プロンプト: ${promptContent.length}, テンプレート: ${templateContent.length})`);
+      console.log(`  🔍 [DEBUG] ソース: phase4-prompts.ts (埋め込み版)`);
+      console.log(`  🔍 [DEBUG] プロンプト開始: "${promptContent.substring(0, 50)}..."`);
 
       // ========================================
       // Step 3: 入力データ構築
@@ -188,10 +162,9 @@ export const phase4ReportGenerationStep = createStep({
       console.log(`  ✅ リスク評価＋総評（HTML）: ${riskSummaryHtml.length}文字`);
       console.log(`  ✅ 分析詳細（HTML）: ${detailedAnalysisHtml.length}文字`);
 
-      // HTMLレポートをファイルに保存（プロジェクトルートのdocsに保存）
-      const reportPath = path.join(projectRoot, 'docs', `phase4-report-${recordId}.html`);
-      fs.writeFileSync(reportPath, reportHtml, 'utf-8');
-      console.log(`  💾 HTMLレポート保存: ${reportPath}`);
+      // HTMLレポートは結果として返すのみ（ファイル保存はしない）
+      const reportPath = `phase4-report-${recordId}.html (メモリ内)`;
+      console.log(`  📄 HTMLレポート生成完了: ${reportPath}`);
 
       const totalDuration = Date.now() - startTime;
 
