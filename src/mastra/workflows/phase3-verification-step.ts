@@ -1,13 +1,17 @@
 import { createStep } from "@mastra/core/workflows";
 import { RuntimeContext } from "@mastra/core/runtime-context";
 import { z } from "zod";
-import { openai } from "@ai-sdk/openai";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { generateObject } from "ai";
 import axios from "axios";
 import { googleVisionIdentityOcrTool } from "../tools/google-vision-identity-ocr-tool";
 import { identityVerificationTool } from "../tools/identity-verification-tool";
 import { egoSearchTool } from "../tools/ego-search-tool";
 import { companyVerifyBatchTool } from "../tools/company-verify-batch-tool";
+
+const google = createGoogleGenerativeAI({
+  apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+});
 
 /**
  * Phase 3: 本人確認・企業実在性確認ステップ
@@ -146,7 +150,7 @@ export const phase3VerificationStep = createStep({
         context: {
           recordId,
           identityDocuments: ocrResult.identityDocuments,
-          model: "gpt-4o",
+          model: "gemini-2.5-flash-lite",
         },
         runtimeContext: new RuntimeContext(),
       });
@@ -617,7 +621,7 @@ async function analyzeSearchResultsRelevance(
 ): Promise<{ results: Array<{ index: number; isRelevant: boolean; reason: string }> }> {
   try {
     const result = await generateObject({
-      model: openai("gpt-4o"),
+      model: google("gemini-2.5-flash-lite"),
       prompt: `以下のWeb検索結果を分析し、
 「${name}」に関する詐欺・被害・逮捕・容疑の情報が
 本当に含まれているか、各結果について判定してください。

@@ -1,8 +1,12 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-import { openai } from "@ai-sdk/openai";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { generateObject } from "ai";
 import axios from "axios";
+
+const google = createGoogleGenerativeAI({
+  apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+});
 
 export const identityVerificationTool = createTool({
   id: "identity-verification",
@@ -15,7 +19,7 @@ export const identityVerificationTool = createTool({
       text: z.string(),
       pageCount: z.number(),
     })).describe("OCR処理済みの本人確認書類"),
-    model: z.string().describe("使用するAIモデル").default("gpt-4o"),
+    model: z.string().describe("使用するAIモデル").default("gemini-2.5-flash-lite"),
   }),
   
   outputSchema: z.object({
@@ -153,7 +157,7 @@ persons: [
 JSON形式で出力してください。`;
       
       const result = await generateObject({
-        model: openai(model),
+        model: google(model),
         prompt: analysisPrompt,
         schema: z.object({
           persons: z.array(z.object({
