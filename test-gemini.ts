@@ -58,6 +58,45 @@ async function testGemini() {
       console.log("✗ Gemini 1.5 Flash 失敗:", e.message);
     }
 
+    // Test 5: Gemini 2.5 Pro (stable)
+    console.log("=== Test 5: Gemini 2.5 Pro (stable) ===");
+    try {
+      const result5 = await generateText({
+        model: google("gemini-2.5-pro"),
+        prompt: "こんにちは！簡単な自己紹介をしてください。",
+      });
+      console.log("✓ Gemini 2.5 Pro 成功！");
+      console.log(result5.text.substring(0, 100) + "...\n");
+    } catch (e: any) {
+      console.log("✗ Gemini 2.5 Pro 失敗:", e.message);
+    }
+
+    // Test 6: Gemini 2.5 Pro Experimental
+    console.log("=== Test 6: Gemini 2.5 Pro Experimental ===");
+    try {
+      const result6 = await generateText({
+        model: google("gemini-2.5-pro-exp-03-25"),
+        prompt: "こんにちは！簡単な自己紹介をしてください。",
+      });
+      console.log("✓ Gemini 2.5 Pro Experimental 成功！");
+      console.log(result6.text.substring(0, 100) + "...\n");
+    } catch (e: any) {
+      console.log("✗ Gemini 2.5 Pro Experimental 失敗:", e.message);
+    }
+
+    // Test 7: Gemini 2.5 Pro Preview
+    console.log("=== Test 7: Gemini 2.5 Pro Preview ===");
+    try {
+      const result7 = await generateText({
+        model: google("gemini-2.5-pro-preview-05-06"),
+        prompt: "こんにちは！簡単な自己紹介をしてください。",
+      });
+      console.log("✓ Gemini 2.5 Pro Preview 成功！");
+      console.log(result7.text.substring(0, 100) + "...\n");
+    } catch (e: any) {
+      console.log("✗ Gemini 2.5 Pro Preview 失敗:", e.message);
+    }
+
     console.log("\n=== テスト完了 ===");
 
   } catch (error: any) {

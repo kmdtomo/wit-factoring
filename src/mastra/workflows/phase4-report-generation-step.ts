@@ -16,7 +16,7 @@ const google = createGoogleGenerativeAI({
  * 処理フロー:
  * 1. Kintoneデータ取得（全テーブル）
  * 2. プロンプト・テンプレート読み込み
- * 3. Gemini 2.5 Flashによる包括的レポート生成
+ * 3. Gemini 2.5 Proによる包括的レポート生成
  * 4. HTMLレポート出力
  */
 export const phase4ReportGenerationStep = createStep({
@@ -141,12 +141,12 @@ export const phase4ReportGenerationStep = createStep({
       );
 
       console.log(`  📊 プロンプト総文字数: ${fullPrompt.length}文字`);
-      console.log(`  🤖 Gemini 2.5 Flashにリクエスト中...`);
+      console.log(`  🤖 Gemini 2.5 Proにリクエスト中...`);
 
       const aiStartTime = Date.now();
 
       const result = await generateText({
-        model: google("gemini-2.5-flash"),
+        model: google("gemini-2.5-pro"),
         prompt: fullPrompt,
         temperature: 0.3,
       });
@@ -304,7 +304,7 @@ function buildInputData(
 }
 
 /**
- * 完全なプロンプト構築
+ * 完全なプロンプト構築（Markdown形式で最適化）
  */
 function buildFullPrompt(
   promptContent: string,
@@ -329,92 +329,323 @@ ${templateContent}
 ### Record ID
 ${inputData.recordId}
 
+---
+
 ### Phase 1 結果（買取・担保情報）
 
-#### 買取書類（purchaseDocuments）
-
-${JSON.stringify(inputData.phase1.purchaseDocuments, null, 2)}
-
-#### 担保書類（collateralDocuments）
-
-${JSON.stringify(inputData.phase1.collateralDocuments, null, 2)}
-
-#### 買取検証結果（purchaseVerification）
-
-${JSON.stringify(inputData.phase1.purchaseVerification, null, 2)}
-
-#### 担保情報抽出（collateralExtraction）
-
-${JSON.stringify(inputData.phase1.collateralExtraction, null, 2)}
+${formatPhase1Data(inputData.phase1)}
 
 ---
 
 ### Phase 2 結果（通帳分析）
 
-#### メイン通帳分析
-
-${JSON.stringify(inputData.phase2.mainBankAnalysis, null, 2)}
-
-#### ファクタリング業者リスト
-
-${JSON.stringify(inputData.phase2.factoringCompanies, null, 2)}
+${formatPhase2Data(inputData.phase2)}
 
 ---
 
 ### Phase 3 結果（本人確認・企業実在性）
 
-#### 本人確認
-
-${JSON.stringify(inputData.phase3.本人確認, null, 2)}
-
-#### 申込者エゴサーチ
-
-${JSON.stringify(inputData.phase3.申込者エゴサーチ, null, 2)}
-
-#### 企業実在性
-
-${JSON.stringify(inputData.phase3.企業実在性, null, 2)}
-
-#### 代表者リスク
-
-${JSON.stringify(inputData.phase3.代表者リスク, null, 2)}
+${formatPhase3Data(inputData.phase3)}
 
 ---
 
 ### Kintoneデータ
 
-#### 基本情報
-
-${JSON.stringify(inputData.kintone.基本情報, null, 2)}
-
-#### 財務・リスク情報
-
-${JSON.stringify(inputData.kintone.財務リスク情報, null, 2)}
-
-#### 買取情報テーブル
-
-${JSON.stringify(inputData.kintone.買取情報, null, 2)}
-
-#### 担保情報テーブル
-
-${JSON.stringify(inputData.kintone.担保情報, null, 2)}
-
-#### 謄本情報テーブル
-
-${JSON.stringify(inputData.kintone.謄本情報, null, 2)}
-
-#### 期待値テーブル（通帳照合用）
-
-${JSON.stringify(inputData.kintone.期待値, null, 2)}
-
-#### 回収情報テーブル
-
-${JSON.stringify(inputData.kintone.回収情報, null, 2)}
+${formatKintoneData(inputData.kintone)}
 
 ---
 
 上記のデータを分析し、テンプレートに従って完全なHTML形式の審査レポートを生成してください。
 `;
+}
+
+// ========================================
+// データフォーマット関数（Markdown形式）
+// ========================================
+
+/**
+ * Phase 1データをMarkdown形式にフォーマット
+ */
+function formatPhase1Data(phase1: any): string {
+  let output = '';
+
+  // 買取書類
+  output += '#### 買取書類\n\n';
+  if (phase1.purchaseDocuments && phase1.purchaseDocuments.length > 0) {
+    phase1.purchaseDocuments.forEach((doc: any) => {
+      output += `**📄 ${doc.fileName}**\n`;
+      output += `- 文書タイプ: ${doc.documentType}\n`;
+
+      const facts = doc.extractedFacts || {};
+      if (facts.請求元) output += `- 請求元: ${facts.請求元}\n`;
+      if (facts.請求先) output += `- 請求先: ${facts.請求先}\n`;
+      if (facts.請求額) output += `- 請求額: ${facts.請求額}\n`;
+      if (facts.請求日) output += `- 請求日: ${facts.請求日}\n`;
+      if (facts.支払期日) output += `- 支払期日: ${facts.支払期日}\n`;
+      if (facts.業務内容) output += `- 業務内容: ${facts.業務内容}\n`;
+      if (facts.工期) output += `- 工期: ${facts.工期}\n`;
+      if (facts.振込先) output += `- 振込先: ${facts.振込先}\n`;
+
+      output += '\n';
+    });
+  } else {
+    output += '⚠️ 買取書類なし\n\n';
+  }
+
+  // 担保書類
+  output += '#### 担保書類\n\n';
+  if (phase1.collateralDocuments && phase1.collateralDocuments.length > 0) {
+    phase1.collateralDocuments.forEach((doc: any) => {
+      output += `**📄 ${doc.fileName}**\n`;
+      output += `- 文書タイプ: ${doc.documentType}\n`;
+
+      const facts = doc.extractedFacts || {};
+      if (facts.会社名) output += `- 会社名: ${facts.会社名}\n`;
+      if (facts.資本金) output += `- 資本金: ${facts.資本金}\n`;
+      if (facts.設立年月日) output += `- 設立年月日: ${facts.設立年月日}\n`;
+      if (facts.代表取締役) output += `- 代表取締役: ${facts.代表取締役}\n`;
+      if (facts.本店所在地) output += `- 本店所在地: ${facts.本店所在地}\n`;
+
+      output += '\n';
+    });
+  } else {
+    output += '⚠️ 担保書類なし\n\n';
+  }
+
+  // 買取検証結果
+  output += '#### 買取検証結果\n\n';
+  output += `- Kintone照合: **${phase1.purchaseVerification?.kintoneMatch || '不一致'}**\n\n`;
+
+  // 担保情報抽出
+  output += '#### 担保情報抽出\n\n';
+  if (phase1.collateralExtraction?.findings && phase1.collateralExtraction.findings.length > 0) {
+    phase1.collateralExtraction.findings.forEach((finding: string, idx: number) => {
+      output += `${idx + 1}. ${finding}\n`;
+    });
+  } else {
+    output += '⚠️ 担保情報抽出なし（担保謄本ファイルが未提出の可能性）\n';
+  }
+
+  return output;
+}
+
+/**
+ * Phase 2データをMarkdown形式にフォーマット
+ */
+function formatPhase2Data(phase2: any): string {
+  let output = '';
+
+  // メイン通帳分析
+  output += '#### メイン通帳分析\n\n';
+
+  const mainBank = phase2.mainBankAnalysis;
+  if (mainBank && mainBank.collateralMatches && mainBank.collateralMatches.length > 0) {
+    output += '**担保企業からの入金照合結果:**\n\n';
+
+    mainBank.collateralMatches.forEach((match: any) => {
+      output += `##### ${match.company}\n\n`;
+
+      // 月次照合結果
+      if (match.monthlyResults && match.monthlyResults.length > 0) {
+        output += '| 月 | 期待値 | 実績 | 照合結果 | タイプ |\n';
+        output += '|----|--------|------|----------|--------|\n';
+
+        match.monthlyResults.forEach((result: any) => {
+          const icon = result.matched ? '✅' : '❌';
+          output += `| ${result.month} | ¥${result.expected.toLocaleString()} | ¥${result.actual.toLocaleString()} | ${icon} ${result.matched ? '一致' : '不一致'} | ${result.matchType} |\n`;
+        });
+        output += '\n';
+      }
+    });
+  } else {
+    output += '⚠️ メイン通帳データなし\n\n';
+  }
+
+  // ギャンブル検出
+  output += '**ギャンブル検出:**\n\n';
+  const gambling = mainBank?.riskDetection?.gambling || [];
+  if (gambling.length > 0) {
+    output += `⚠️ ${gambling.length}件検出\n\n`;
+    output += '| 日付 | 金額 | 振込先 | キーワード |\n';
+    output += '|------|------|--------|------------|\n';
+    gambling.forEach((g: any) => {
+      output += `| ${g.date} | -¥${Math.abs(g.amount).toLocaleString()} | ${g.destination} | ${g.keyword} |\n`;
+    });
+    output += '\n';
+  } else {
+    output += '✅ 検出なし\n\n';
+  }
+
+  // 他社ファクタリング検出
+  output += '**他社ファクタリング検出:**\n\n';
+  const factoring = phase2.factoringCompanies || [];
+  if (factoring.length > 0) {
+    output += `⚠️ ${factoring.length}件検出\n\n`;
+    output += '| 日付 | 業者名 | 金額 | 種別 |\n';
+    output += '|------|--------|------|------|\n';
+    factoring.forEach((f: any) => {
+      const sign = f.transactionType === '入金' ? '+' : '-';
+      output += `| ${f.date} | ${f.companyName} | ${sign}¥${Math.abs(f.amount).toLocaleString()} | ${f.transactionType} |\n`;
+    });
+  } else {
+    output += '✅ 検出なし\n';
+  }
+
+  return output;
+}
+
+/**
+ * Phase 3データをMarkdown形式にフォーマット
+ */
+function formatPhase3Data(phase3: any): string {
+  let output = '';
+
+  // 本人確認
+  output += '#### 本人確認\n\n';
+  const identity = phase3.本人確認 || {};
+  output += `- 書類タイプ: ${identity.書類タイプ || 'なし'}\n`;
+  output += `- 照合結果: ${identity.照合結果 || '未実施'}\n`;
+  output += `- 検出人数: ${identity.検出人数 || 0}人\n`;
+  output += `- 一致人数: ${identity.一致人数 || 0}人\n`;
+
+  if (identity.一致人物) {
+    output += '\n**一致した人物:**\n';
+    output += `- 氏名: ${identity.一致人物.氏名}\n`;
+    output += `- 生年月日: ${identity.一致人物.生年月日}\n`;
+    output += `- 住所: ${identity.一致人物.住所}\n`;
+  }
+  output += '\n';
+
+  // 申込者エゴサーチ
+  output += '#### 申込者エゴサーチ\n\n';
+  const ego = phase3.申込者エゴサーチ || {};
+  output += `- ネガティブ情報: ${ego.ネガティブ情報 ? '⚠️ あり' : '✅ なし'}\n`;
+  output += `- 詐欺情報サイト: ${ego.詐欺情報サイト || 0}件\n`;
+  output += `- Web検索: ${ego.Web検索 || 0}件\n`;
+  output += `- 詳細: ${ego.詳細 || 'なし'}\n`;
+  if (ego.URL) {
+    output += `- **URL**: ${ego.URL}\n`;
+  }
+  output += '\n';
+
+  // 企業実在性
+  output += '#### 企業実在性\n\n';
+  const companies = phase3.企業実在性 || {};
+
+  // 申込企業
+  if (companies.申込企業) {
+    output += '**申込企業:**\n';
+    output += `- 企業名: ${companies.申込企業.企業名 || '不明'}\n`;
+    output += `- 公式サイト: ${companies.申込企業.公式サイト || 'なし'}\n`;
+    output += `- 信頼度: ${companies.申込企業.信頼度}%\n\n`;
+  }
+
+  // 買取企業
+  if (companies.買取企業) {
+    output += '**買取企業:**\n';
+    output += `- 総数: ${companies.買取企業.総数}社\n`;
+    output += `- 確認済み: ${companies.買取企業.確認済み}社\n`;
+    output += `- 未確認: ${companies.買取企業.未確認}社\n\n`;
+  }
+
+  // 担保企業
+  if (companies.担保企業) {
+    output += '**担保企業:**\n';
+    output += `- 総数: ${companies.担保企業.総数}社\n`;
+    output += `- 確認済み: ${companies.担保企業.確認済み}社\n`;
+    output += `- 未確認: ${companies.担保企業.未確認}社\n`;
+
+    if (companies.担保企業.企業リスト && companies.担保企業.企業リスト.length > 0) {
+      output += '\n| 企業名 | 公式サイト | 信頼度 |\n';
+      output += '|--------|-----------|--------|\n';
+      companies.担保企業.企業リスト.forEach((c: any) => {
+        output += `| ${c.企業名} | ${c.公式サイト || 'なし'} | ${c.信頼度}% |\n`;
+      });
+    }
+    output += '\n';
+  }
+
+  // 代表者リスク
+  output += '#### 代表者リスク\n\n';
+  const rep = phase3.代表者リスク || {};
+  output += `- 検索対象: ${rep.検索対象 || 0}名\n`;
+  output += `- リスク検出: ${rep.リスク検出 || 0}名\n`;
+
+  return output;
+}
+
+/**
+ * KintoneデータをMarkdown形式にフォーマット
+ */
+function formatKintoneData(kintone: any): string {
+  let output = '';
+
+  // 基本情報
+  output += '#### 基本情報\n\n';
+  const basic = kintone.基本情報 || {};
+  if (basic.氏名) output += `- 氏名: ${basic.氏名}\n`;
+  if (basic.生年月日) output += `- 生年月日: ${basic.生年月日}\n`;
+  if (basic.年齢) output += `- 年齢: ${basic.年齢}歳\n`;
+  if (basic.住所) output += `- 住所: ${basic.住所}\n`;
+  if (basic.種別) output += `- 種別: ${basic.種別}\n`;
+  if (basic.屋号) output += `- 屋号: ${basic.屋号}\n`;
+  if (basic.会社名) output += `- 会社名: ${basic.会社名}\n`;
+  if (basic.設立年) output += `- 設立年: ${basic.設立年}\n`;
+  if (basic.業種) output += `- 業種: ${basic.業種}\n`;
+  if (basic.売上) output += `- 売上: ${basic.売上}\n`;
+  output += '\n';
+
+  // 財務・リスク情報
+  output += '#### 財務・リスク情報\n\n';
+  const finance = kintone.財務リスク情報 || {};
+  if (finance.資金使途) output += `- 資金使途: ${finance.資金使途}\n`;
+  if (finance.ファクタリング利用) output += `- ファクタリング利用: ${finance.ファクタリング利用}\n`;
+  if (finance.税金滞納額 !== undefined) output += `- 税金滞納額: ¥${finance.税金滞納額.toLocaleString()}\n`;
+  if (finance.保険料滞納額 !== undefined) output += `- 保険料滞納額: ¥${finance.保険料滞納額.toLocaleString()}\n`;
+  output += '\n';
+
+  // 買取情報テーブル
+  output += '#### 買取情報テーブル\n\n';
+  const purchase = kintone.買取情報 || [];
+  if (purchase.length > 0) {
+    output += '| 企業名 | 買取額 | 請求額 | 掛目 | 再契約の意思 |\n';
+    output += '|--------|--------|--------|------|-------------|\n';
+    purchase.forEach((p: any) => {
+      output += `| ${p.企業名 || ''} | ¥${(p.買取額 || 0).toLocaleString()} | ¥${(p.請求額 || 0).toLocaleString()} | ${p.掛目 || 0}% | ${p.再契約の意思 || ''} |\n`;
+    });
+    output += '\n';
+  } else {
+    output += '⚠️ データなし\n\n';
+  }
+
+  // 担保情報テーブル
+  output += '#### 担保情報テーブル\n\n';
+  const collateral = kintone.担保情報 || [];
+  if (collateral.length > 0) {
+    output += '| 会社名 | 次回入金予定額 | 先々月 | 先月 | 今月 |\n';
+    output += '|--------|---------------|--------|------|------|\n';
+    collateral.forEach((c: any) => {
+      output += `| ${c.会社名 || ''} | ¥${(c.次回入金予定額 || 0).toLocaleString()} | ¥${(c.先々月 || 0).toLocaleString()} | ¥${(c.先月 || 0).toLocaleString()} | ¥${(c.今月 || 0).toLocaleString()} |\n`;
+    });
+    output += '\n';
+  } else {
+    output += '⚠️ データなし\n\n';
+  }
+
+  // 謄本情報テーブル
+  output += '#### 謄本情報テーブル\n\n';
+  const registry = kintone.謄本情報 || [];
+  if (registry.length > 0) {
+    output += '| 会社名 | 資本金 | 設立年 | 最終登記取得日 |\n';
+    output += '|--------|--------|--------|---------------|\n';
+    registry.forEach((r: any) => {
+      output += `| ${r.会社名 || ''} | ${r.資本金 || ''} | ${r.設立年 || ''} | ${r.最終登記取得日 || ''} |\n`;
+    });
+  } else {
+    output += '⚠️ データなし\n';
+  }
+
+  return output;
 }
 
 /**
