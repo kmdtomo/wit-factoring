@@ -29,6 +29,11 @@ export const phase4ReportGenerationStep = createStep({
   outputSchema: z.object({
     recordId: z.string(),
 
+    // Phase 1-3の結果（引き継ぎ）
+    phase1Results: z.any().optional(),
+    phase2Results: z.any().optional(),
+    phase3Results: z.any().optional(),
+
     // Kintone用フィールド1: リスク評価＋総評（HTML）
     riskSummaryHtml: z.string().describe("リスク評価と総評 - HTML形式（Kintoneリッチエディタ用）"),
 
@@ -97,14 +102,26 @@ export const phase4ReportGenerationStep = createStep({
       // ========================================
       console.log(`\n[Phase 4 - Step 2/4] プロンプト・テンプレート読み込み`);
 
-      // プロジェクトルートを取得（.mastra/outputから2階層上）
-      const projectRoot = path.resolve(process.cwd(), '..', '..');
-      const promptPath = path.join(projectRoot, 'docs', 'phase4-prompt-balanced.md');
-      const templatePath = path.join(projectRoot, 'docs', 'ideal-phase4-report-template.html');
+      // docsディレクトリから読み込み
+      console.log(`  🔍 [DEBUG] __dirname: ${__dirname}`);
+      console.log(`  🔍 [DEBUG] process.cwd(): ${process.cwd()}`);
+      console.log(`  🔍 [DEBUG] __filename: ${__filename}`);
 
-      console.log(`  📂 プロジェクトルート: ${projectRoot}`);
+      // プロジェクトルートを取得（.mastra/output から2階層上）
+      const projectRoot = __dirname.includes('.mastra') 
+        ? path.join(__dirname, '../..') 
+        : process.cwd();
+      
+      const docsDir = path.join(projectRoot, 'docs');
+      const promptPath = path.join(docsDir, 'phase4-prompt-compact.md');
+      const templatePath = path.join(docsDir, 'ideal-phase4-report-template-compact.html');
+
+      console.log(`  📂 カレントディレクトリ: ${process.cwd()}`);
+      console.log(`  📂 docsディレクトリ: ${docsDir}`);
       console.log(`  📄 プロンプトパス: ${promptPath}`);
       console.log(`  📄 テンプレートパス: ${templatePath}`);
+      console.log(`  🔍 [DEBUG] promptPath exists: ${fs.existsSync(promptPath)}`);
+      console.log(`  🔍 [DEBUG] templatePath exists: ${fs.existsSync(templatePath)}`);
 
       if (!fs.existsSync(promptPath)) {
         throw new Error(`プロンプトファイルが見つかりません: ${promptPath}`);
