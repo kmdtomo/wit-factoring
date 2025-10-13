@@ -62,6 +62,8 @@ export const phase3VerificationStep = createStep({
         申込企業: z.object({
           企業名: z.string(),
           公式サイト: z.string(),
+          確認方法: z.string(),
+          確認元URL: z.string().optional(),
           信頼度: z.number(),
         }).optional(),
         買取企業: z.object({
@@ -71,6 +73,8 @@ export const phase3VerificationStep = createStep({
           企業リスト: z.array(z.object({
             企業名: z.string(),
             公式サイト: z.string(),
+            確認方法: z.string(),
+            確認元URL: z.string().optional(),
             信頼度: z.number(),
           })),
         }),
@@ -82,6 +86,8 @@ export const phase3VerificationStep = createStep({
           企業リスト: z.array(z.object({
             企業名: z.string(),
             公式サイト: z.string(),
+            確認方法: z.string(),
+            確認元URL: z.string().optional(),
             信頼度: z.number(),
           })),
         }),
@@ -151,7 +157,7 @@ export const phase3VerificationStep = createStep({
         context: {
           recordId,
           identityDocuments: ocrResult.identityDocuments,
-          model: "gemini-2.5-flash-lite",
+          model: "gemini-2.5-flash",
         },
         runtimeContext: new RuntimeContext(),
       });
@@ -239,97 +245,25 @@ export const phase3VerificationStep = createStep({
     }
     
     console.log(`\n【Web検索】`);
+    for (const result of applicantEgoSearch.negativeSearchResults) {
+      if (result.found && result.results && result.results.length > 0) {
+        console.log(`\n  "${result.query}": ${result.results.length}件`);
+        result.results.forEach((r: any, idx: number) => {
+          console.log(`    ${idx + 1}. ${r.title}`);
+          console.log(`       URL: ${r.url}`);
+          console.log(`       ${r.snippet}`);
+        });
+      } else {
+        console.log(`\n  "${result.query}": 0件`);
+      }
+    }
 
     // 申込者名を取得（本人確認結果 or Kintone）
-    const searchTargetName = identityResult
+    const applicantName = identityResult
       ? identityResult.processingDetails.expectedName
       : await fetchApplicantNameFromKintone(recordId);
 
-    // GPT-4.1でAI判定を行う（1クエリにつき1回のAPI呼び出し）
-    const filteredNegativeResults = [];
-    for (const result of applicantEgoSearch.negativeSearchResults) {
-      if (result.found && result.results && result.results.length > 0) {
-        console.log(`\n  "${result.query}": ${result.results.length}件の検索結果を分析中...`);
-
-        // 全検索結果を1回のAPI呼び出しで判定
-        const analysisResult = await analyzeSearchResultsRelevance(
-          searchTargetName,
-          result.query,
-          result.results
-        );
-
-        const relevantResults = result.results
-          .map((searchResult: any, idx: number) => {
-            const analysis = analysisResult.results.find((r: any) => r.index === idx);
-            if (analysis && analysis.isRelevant) {
-              return {
-                ...searchResult,
-                aiReason: analysis.reason,
-              };
-            }
-            return null;
-          })
-          .filter((r: any) => r !== null);
-
-        if (relevantResults.length > 0) {
-          console.log(`  ⚠️ "${result.query}": ${relevantResults.length}件検出（AI判定済み）`);
-          relevantResults.slice(0, 2).forEach((r, idx) => {
-            console.log(`     ${idx + 1}. ${r.title}`);
-            console.log(`        ${r.url}`);
-            console.log(`        理由: ${r.aiReason}`);
-          });
-          filteredNegativeResults.push({
-            query: result.query,
-            found: true,
-            results: relevantResults,
-          });
-        } else {
-          console.log(`  ✓ "${result.query}": 該当なし（AI判定により無関係と判断）`);
-          filteredNegativeResults.push({
-            query: result.query,
-            found: false,
-            results: undefined,
-          });
-        }
-      } else {
-        console.log(`  ✓ "${result.query}": 該当なし`);
-        filteredNegativeResults.push(result);
-      }
-    }
-    
-    // AI判定後の結果で上書き
-    applicantEgoSearch.negativeSearchResults = filteredNegativeResults;
-    
-    // サマリーを再計算
-    const fraudHits = applicantEgoSearch.fraudSiteResults.filter((r: any) => r.found).length;
-    const negativeHits = filteredNegativeResults.filter((r: any) => r.found);
-    const hasNegativeInfo = negativeHits.length > 0 || fraudHits > 0;
-    
-    let details = "";
-    if (!hasNegativeInfo) {
-      details = "ネガティブ情報は見つかりませんでした。";
-    } else {
-      if (fraudHits > 0) {
-        details = `詐欺情報サイトに${fraudHits}件の情報が見つかりました。`;
-      }
-      if (negativeHits.length > 0) {
-        details += ` Web検索で${negativeHits.map((r: any) => r.query).join('、')}に関する情報が見つかりました（AI判定済み）。`;
-      }
-    }
-    
-    applicantEgoSearch.summary = {
-      hasNegativeInfo,
-      fraudHits,
-      details,
-    };
-    
-    console.log(`\n【判定】`);
-    if (hasNegativeInfo) {
-      console.log(`  ⚠️ ネガティブ情報: あり（要確認）`);
-      console.log(`     ${details}`);
-    } else {
-      console.log(`  ✓ ネガティブ情報: なし`);
-    }
+    // AI判定は後でまとめて実行
     
     // ========================================
     // Step 3: 企業実在性確認（一括検証）
@@ -391,34 +325,38 @@ export const phase3VerificationStep = createStep({
       console.log(`  ⚠️ 担保企業情報なし（担保テーブルが空）`);
     }
 
-    // 全企業を一括検証（1回のAI呼び出し）
-    console.log(`\n全${allCompanies.length}社を一括検証中...`);
-    const batchResult = await companyVerifyBatchTool.execute!({
+    // 全企業の検索を実行（AI判定なし）
+    console.log(`\n全${allCompanies.length}社の検索を実行中...`);
+    const companySearchResult = await companyVerifyBatchTool.execute!({
       context: { companies: allCompanies },
       runtimeContext: new RuntimeContext(),
     });
 
-    // 結果を種別ごとに分類
-    const applicantCompany = batchResult.results.find(r => r.companyType === "申込企業");
-    const purchaseCompanyResults = batchResult.results.filter(r => r.companyType === "買取企業");
-    const collateralCompanyResults = batchResult.results.filter(r => r.companyType === "担保企業");
+    console.log(`検索完了 - ${companySearchResult.companies.length}社`);
 
-    // 結果を表示
-    if (applicantCompany) {
-      console.log(`\n【申込企業】`);
-      printCompanyVerificationResultSimple(applicantCompany);
+    // 企業検索結果の詳細を表示
+    console.log(`\n【企業検索結果の詳細】`);
+    for (const company of companySearchResult.companies) {
+      console.log(`\n  ${company.companyName}（${company.companyType}）:`);
+      if (company.location) {
+        console.log(`  所在地: ${company.location}`);
+      }
+
+      // 全検索クエリの結果を表示
+      for (const searchResult of company.searchResults) {
+        if (searchResult.results && searchResult.results.length > 0) {
+          console.log(`\n    "${searchResult.query}": ${searchResult.results.length}件`);
+          searchResult.results.forEach((r: any, idx: number) => {
+            console.log(`      ${idx + 1}. ${r.title}`);
+            console.log(`         URL: ${r.url}`);
+            console.log(`         ${r.snippet}`);
+          });
+        } else {
+          console.log(`\n    "${searchResult.query}": 0件`);
+        }
+      }
     }
 
-    if (purchaseCompanyResults.length > 0) {
-      console.log(`\n【買取企業】`);
-      purchaseCompanyResults.forEach(r => printCompanyVerificationResultSimple(r));
-    }
-
-    if (collateralCompanyResults.length > 0) {
-      console.log(`\n【担保企業】`);
-      collateralCompanyResults.forEach(r => printCompanyVerificationResultSimple(r));
-    }
-    
     // ========================================
     // Step 4: 代表者リスク検索（並列実行）
     // ========================================
@@ -450,40 +388,132 @@ export const phase3VerificationStep = createStep({
     }
     
     let representativeEgoSearches: any[] = [];
-    
+
     if (representatives.length > 0) {
       console.log(`\n検索対象: ${representatives.length}名`);
-      
+
       representativeEgoSearches = await Promise.all(
         representatives.map(async (rep) => {
           const result = await egoSearchTool.execute!({
             context: { name: rep.name },
             runtimeContext: new RuntimeContext(),
           });
-          
+
+          console.log(`  ${rep.name}（${rep.company}）: 検索完了`);
           return { ...rep, egoSearchResult: result };
         })
       );
-      
-      // 買取企業代表者
+    } else {
+      console.log(`\n  代表者情報が取得できませんでした`);
+    }
+
+    // ========================================
+    // Step 6: 全データのAI分析（1回のAI呼び出し）
+    // ========================================
+    console.log(`\n━━━ Step 6: エゴサーチ＋企業検証 AI分析 ━━━`);
+
+    // 全員のエゴサーチデータを収集
+    const allEgoSearchData = [
+      {
+        personType: "申込者",
+        name: applicantName,
+        company: undefined,
+        companyType: undefined,
+        egoSearchResult: applicantEgoSearch,
+      },
+      ...representativeEgoSearches.map(rep => ({
+        personType: "代表者",
+        name: rep.name,
+        company: rep.company,
+        companyType: rep.type,
+        egoSearchResult: rep.egoSearchResult,
+      })),
+    ];
+
+    console.log(`\n分析対象:`);
+    console.log(`  - エゴサーチ: ${allEgoSearchData.length}名（申込者1名 + 代表者${representativeEgoSearches.length}名）`);
+    console.log(`  - 企業検証: ${companySearchResult.companies.length}社`);
+
+    // 1回のAI呼び出しで全データを分析
+    console.log(`\nAI分析中... (gemini-2.5-flash)`);
+    const aiAnalysisStartTime = Date.now();
+    const analysisResults = await analyzeAllData(allEgoSearchData, companySearchResult.companies);
+    const aiAnalysisDuration = Date.now() - aiAnalysisStartTime;
+    console.log(`AI分析完了 - 処理時間: ${aiAnalysisDuration}ms`);
+
+    // エゴサーチ結果を更新
+    const applicantAnalysis = analysisResults.egoSearchAnalysis.persons.find(p => p.personIndex === 0);
+    if (applicantAnalysis) {
+      updateEgoSearchWithAnalysis(applicantEgoSearch, applicantAnalysis, applicantName);
+    }
+
+    for (let i = 0; i < representativeEgoSearches.length; i++) {
+      const repAnalysis = analysisResults.egoSearchAnalysis.persons.find(p => p.personIndex === i + 1);
+      if (repAnalysis) {
+        updateEgoSearchWithAnalysis(representativeEgoSearches[i].egoSearchResult, repAnalysis, representativeEgoSearches[i].name);
+      }
+    }
+
+    // 企業検証結果を生成
+    const companyVerificationResults = companySearchResult.companies.map((company: any) => {
+      const analysis = analysisResults.companyAnalysis.companies.find((c: any) => c.companyIndex === company.companyIndex);
+
+      if (!analysis) {
+        return {
+          companyName: company.companyName,
+          companyType: company.companyType,
+          verified: false,
+          confidence: 0,
+          websiteUrl: null,
+          verificationUrl: null,
+          verificationSource: "未確認" as const,
+          businessDescription: null,
+          capital: null,
+          established: null,
+        };
+      }
+
+      return {
+        companyName: company.companyName,
+        companyType: company.companyType,
+        verified: analysis.verified,
+        confidence: analysis.confidence,
+        websiteUrl: analysis.websiteUrl,
+        verificationUrl: analysis.verificationUrl,
+        verificationSource: analysis.verificationSource || "未確認",
+        businessDescription: analysis.businessDescription,
+        capital: analysis.capital,
+        established: analysis.established,
+      };
+    });
+
+    // 結果を種別ごとに分類
+    const applicantCompany = companyVerificationResults.find(r => r.companyType === "申込企業");
+    const purchaseCompanyResults = companyVerificationResults.filter(r => r.companyType === "買取企業");
+    const collateralCompanyResults = companyVerificationResults.filter(r => r.companyType === "担保企業");
+
+    // 結果表示
+    console.log(`\n【申込者エゴサーチ結果】`);
+    printEgoSearchResult(applicantName, undefined, applicantEgoSearch);
+
+    if (representativeEgoSearches.length > 0) {
       const purchaseReps = representativeEgoSearches.filter(r => r.type === "買取企業");
       if (purchaseReps.length > 0) {
         console.log(`\n【買取企業代表者】`);
         for (const rep of purchaseReps) {
-          printRepresentativeEgoSearchResult(rep);
+          printEgoSearchResult(rep.name, rep.company, rep.egoSearchResult);
         }
       }
-      
-      // 担保企業代表者
+
       const collateralReps = representativeEgoSearches.filter(r => r.type === "担保企業");
       if (collateralReps.length > 0) {
         console.log(`\n【担保企業代表者】`);
         for (const rep of collateralReps) {
-          printRepresentativeEgoSearchResult(rep);
+          printEgoSearchResult(rep.name, rep.company, rep.egoSearchResult);
         }
       }
-      
-      console.log(`\n【判定】`);
+
+      console.log(`\n【代表者リスク判定】`);
       const riskyReps = representativeEgoSearches.filter(r => r.egoSearchResult.summary.hasNegativeInfo);
       if (riskyReps.length > 0) {
         console.log(`  ⚠️ 代表者リスク: あり（要確認）`);
@@ -491,8 +521,23 @@ export const phase3VerificationStep = createStep({
       } else {
         console.log(`  ✓ 代表者リスク: なし`);
       }
-    } else {
-      console.log(`\n  代表者情報が取得できませんでした`);
+    }
+
+    // 企業検証結果を表示
+    console.log(`\n【企業検証結果】`);
+    if (applicantCompany) {
+      console.log(`\n申込企業:`);
+      printCompanyVerificationResultSimple(applicantCompany);
+    }
+
+    if (purchaseCompanyResults.length > 0) {
+      console.log(`\n買取企業:`);
+      purchaseCompanyResults.forEach(r => printCompanyVerificationResultSimple(r));
+    }
+
+    if (collateralCompanyResults.length > 0) {
+      console.log(`\n担保企業:`);
+      collateralCompanyResults.forEach(r => printCompanyVerificationResultSimple(r));
     }
     
     // ========================================
@@ -542,7 +587,7 @@ export const phase3VerificationStep = createStep({
       } else {
         // Web検索結果のURLを取得
         const negativeSearch = applicantEgoSearch.negativeSearchResults.find((r: any) => r.found && r.results && r.results.length > 0);
-        if (negativeSearch) {
+        if (negativeSearch && negativeSearch.results && negativeSearch.results.length > 0) {
           negativeURL = negativeSearch.results[0].url;
         }
       }
@@ -561,14 +606,18 @@ export const phase3VerificationStep = createStep({
       申込企業: applicantCompany ? {
         企業名: applicantCompany.companyName,
         公式サイト: applicantCompany.websiteUrl || "なし",
+        確認方法: applicantCompany.verificationSource,
+        確認元URL: applicantCompany.verificationUrl || undefined,
         信頼度: applicantCompany.confidence,
       } : applicantInfo.companyName ? {
         企業名: applicantInfo.companyName,
         公式サイト: "なし",
+        確認方法: "未確認",
         信頼度: 0,
       } : {
         企業名: "取得失敗",
         公式サイト: "なし",
+        確認方法: "未確認",
         信頼度: 0,
       },
       買取企業: {
@@ -578,6 +627,8 @@ export const phase3VerificationStep = createStep({
         企業リスト: purchaseCompanyResults.map((c: any) => ({
           企業名: c.companyName,
           公式サイト: c.websiteUrl || "なし",
+          確認方法: c.verificationSource,
+          確認元URL: c.verificationUrl || undefined,
           信頼度: c.confidence,
         })),
       },
@@ -589,6 +640,8 @@ export const phase3VerificationStep = createStep({
         企業リスト: collateralCompanyResults.map((c: any) => ({
           企業名: c.companyName,
           公式サイト: c.websiteUrl || "なし",
+          確認方法: c.verificationSource,
+          確認元URL: c.verificationUrl || undefined,
           信頼度: c.confidence,
         })),
       },
@@ -630,53 +683,317 @@ export const phase3VerificationStep = createStep({
 // ========================================
 
 /**
- * Web検索結果の関連性をAIで判定（複数の検索結果を1回で判定）
+ * エゴサーチと企業検証を1回のAI呼び出しで一括分析
  */
-async function analyzeSearchResultsRelevance(
-  name: string,
-  query: string,
-  searchResults: Array<{ title: string; snippet: string; url: string }>
-): Promise<{ results: Array<{ index: number; isRelevant: boolean; reason: string }> }> {
+async function analyzeAllData(
+  allEgoSearchData: Array<{
+    personType: string;
+    name: string;
+    company?: string;
+    companyType?: string;
+    egoSearchResult: any;
+  }>,
+  companySearchData: Array<{
+    companyIndex: number;
+    companyName: string;
+    companyType: string;
+    location?: string;
+    searchResults: Array<{
+      query: string;
+      results: Array<{ title: string; url: string; snippet: string }>;
+    }>;
+  }>
+): Promise<{
+  egoSearchAnalysis: {
+    persons: Array<{
+      personIndex: number;
+      queries: Array<{
+        queryIndex: number;
+        query: string;
+        results: Array<{
+          resultIndex: number;
+          isRelevant: boolean;
+          reason: string;
+        }>;
+      }>;
+    }>;
+  };
+  companyAnalysis: {
+    companies: Array<{
+      companyIndex: number;
+      verified: boolean;
+      confidence: number;
+      websiteUrl?: string | null;
+      verificationUrl?: string | null;
+      verificationSource: "公式サイト" | "第三者サイト" | "未確認";
+      businessDescription?: string | null;
+      capital?: string | null;
+      established?: string | null;
+      reason?: string;
+    }>;
+  };
+}> {
   try {
+    // エゴサーチデータの整形
+    const personsInfo = allEgoSearchData.map((person, personIdx) => {
+      const queriesInfo = person.egoSearchResult.negativeSearchResults
+        .map((queryResult: any, queryIdx: number) => {
+          if (!queryResult.found || !queryResult.results || queryResult.results.length === 0) {
+            return null;
+          }
+
+          const resultsInfo = queryResult.results
+            .map((result: any, resultIdx: number) => {
+              return `    結果${resultIdx}: ${result.title}\n       ${result.snippet}`;
+            })
+            .join('\n');
+
+          return `  クエリ${queryIdx}: "${queryResult.query}"\n${resultsInfo}`;
+        })
+        .filter((q: any) => q !== null)
+        .join('\n');
+
+      if (!queriesInfo) {
+        return null;
+      }
+
+      const personInfo = person.company
+        ? `対象者${personIdx}: ${person.name}（${person.personType} - ${person.company}）`
+        : `対象者${personIdx}: ${person.name}（${person.personType}）`;
+
+      return `${personInfo}\n${queriesInfo}`;
+    }).filter((p: any) => p !== null).join('\n\n');
+
+    // 企業検索データの整形
+    const companiesInfo = companySearchData.map((company, companyIdx) => {
+      const allResults = company.searchResults.flatMap(s => s.results);
+
+      const resultsInfo = allResults
+        .map((r, i) => `  ${i + 1}. ${r.title}\n     URL: ${r.url}\n     ${r.snippet}`)
+        .join('\n');
+
+      return `企業${companyIdx}: ${company.companyName}（${company.companyType}）
+${company.location ? `所在地: ${company.location}` : ''}
+検索結果 (${allResults.length}件):
+${resultsInfo}`;
+    }).join('\n\n---\n\n');
+
     const result = await generateObject({
-      model: google("gemini-2.5-flash-lite"),
-      prompt: `以下のWeb検索結果を分析し、「${name}」本人が犯罪・不正の対象者として扱われているかを判定してください。
+      model: google("gemini-2.5-flash"),
+      prompt: `これはファクタリングのためのweb検索結果です。建設業関連の債権回収案件を前提に企業実在性を確認してください。
 
-検索クエリ: "${query}"
+以下のエゴサーチと企業検証のデータを分析してください。
 
-【検索結果】
-${searchResults.map((r, i) => `
-${i}. タイトル: ${r.title}
-   スニペット: ${r.snippet}
-`).join('\n')}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【パート1: エゴサーチ分析】
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-判定基準:
-- 「${name}」本人が容疑者・被告・加害者として扱われている → true
-- 「${name}」が専門家・警察官・第三者として言及されているだけ → false
-- 同姓同名の別人 → false
-- 無関係な記事 → false
+${personsInfo || '(エゴサーチ結果なし)'}
 
-各検索結果についてJSON形式で返してください。`,
+【エゴサーチ判定基準】
+- 同姓同名の別人（地域・職業が異なる）→ false
+- 専門家・警察官として言及 → false
+- 容疑者・被告として扱われている → true
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【パート2: 企業検証分析】
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+${companiesInfo}
+
+【企業検証判定基準】
+1. 法人格の照合（株式会社、有限会社など）
+2. 企業名の照合
+3. 所在地の照合（指定がある場合）
+4. サイトの種類判定：
+   - 公式サイトが見つかった場合 → verified=true, verificationSource="公式サイト", websiteUrlに公式URL, verificationUrlに公式URL
+   - 第三者サイト（建設業許可サイト、助太刀、ツクリンク、社員口コミサイトなど）で確認できた場合 → verified=true, verificationSource="第三者サイト", websiteUrl=null, verificationUrlに第三者サイトのURL
+   - 確認不十分 → verified=false, verificationSource="未確認", websiteUrl=null, verificationUrl=null
+
+各データについて判定結果を返してください。`,
       schema: z.object({
-        results: z.array(z.object({
-          index: z.number().describe("検索結果のインデックス"),
-          isRelevant: z.boolean().describe("関連性があるか"),
-          reason: z.string().describe("判定理由（50文字以内）"),
-        })),
+        egoSearchAnalysis: z.object({
+          persons: z.array(z.object({
+            personIndex: z.number(),
+            queries: z.array(z.object({
+              queryIndex: z.number(),
+              query: z.string(),
+              results: z.array(z.object({
+                resultIndex: z.number(),
+                isRelevant: z.boolean(),
+                reason: z.string(),
+              })),
+            })),
+          })),
+        }),
+        companyAnalysis: z.object({
+          companies: z.array(z.object({
+            companyIndex: z.number(),
+            verified: z.boolean(),
+            confidence: z.number().min(0).max(100),
+            websiteUrl: z.string().nullable().optional(),
+            verificationUrl: z.string().nullable().optional(),
+            verificationSource: z.enum(["公式サイト", "第三者サイト", "未確認"]),
+            businessDescription: z.string().nullable().optional(),
+            capital: z.string().nullable().optional(),
+            established: z.string().nullable().optional(),
+            reason: z.string().optional(),
+          })),
+        }),
       }),
     });
 
     return result.object;
   } catch (error) {
-    console.error(`AI判定エラー:`, error);
-    // エラー時は安全側に倒して全て関連ありとする
+    console.error(`AI一括判定エラー:`, error);
     return {
-      results: searchResults.map((_, idx) => ({
-        index: idx,
-        isRelevant: true,
-        reason: "AI判定エラー（要手動確認）",
-      })),
+      egoSearchAnalysis: {
+        persons: allEgoSearchData.map((person, personIdx) => ({
+          personIndex: personIdx,
+          queries: person.egoSearchResult.negativeSearchResults
+            .map((queryResult: any, queryIdx: number) => {
+              if (!queryResult.found || !queryResult.results || queryResult.results.length === 0) {
+                return null;
+              }
+              return {
+                queryIndex: queryIdx,
+                query: queryResult.query,
+                results: queryResult.results.map((_: any, resultIdx: number) => ({
+                  resultIndex: resultIdx,
+                  isRelevant: true,
+                  reason: "AI判定エラー（要手動確認）",
+                })),
+              };
+            })
+            .filter((q: any) => q !== null),
+        })),
+      },
+      companyAnalysis: {
+        companies: companySearchData.map((company, idx) => ({
+          companyIndex: idx,
+          verified: false,
+          confidence: 0,
+          websiteUrl: null,
+          verificationUrl: null,
+          verificationSource: "未確認" as const,
+          businessDescription: null,
+          capital: null,
+          established: null,
+        })),
+      },
     };
+  }
+}
+
+/**
+ * AI分析結果でエゴサーチ結果を更新
+ */
+function updateEgoSearchWithAnalysis(egoSearchResult: any, analysis: any, name: string): void {
+  const filteredNegativeResults = [];
+
+  for (let queryIdx = 0; queryIdx < egoSearchResult.negativeSearchResults.length; queryIdx++) {
+    const queryResult = egoSearchResult.negativeSearchResults[queryIdx];
+
+    if (!queryResult.found || !queryResult.results || queryResult.results.length === 0) {
+      filteredNegativeResults.push(queryResult);
+      continue;
+    }
+
+    const queryAnalysis = analysis.queries.find((q: any) => q.queryIndex === queryIdx);
+    if (!queryAnalysis) {
+      filteredNegativeResults.push(queryResult);
+      continue;
+    }
+
+    const relevantResults = queryResult.results
+      .map((searchResult: any, idx: number) => {
+        const resultAnalysis = queryAnalysis.results.find((r: any) => r.resultIndex === idx);
+        if (resultAnalysis && resultAnalysis.isRelevant) {
+          return {
+            ...searchResult,
+            aiReason: resultAnalysis.reason,
+          };
+        }
+        return null;
+      })
+      .filter((r: any) => r !== null);
+
+    if (relevantResults.length > 0) {
+      filteredNegativeResults.push({
+        query: queryResult.query,
+        found: true,
+        results: relevantResults,
+      });
+    } else {
+      filteredNegativeResults.push({
+        query: queryResult.query,
+        found: false,
+        results: undefined,
+      });
+    }
+  }
+
+  egoSearchResult.negativeSearchResults = filteredNegativeResults;
+
+  // サマリーを再計算
+  const fraudHits = egoSearchResult.fraudSiteResults.filter((r: any) => r.found).length;
+  const negativeHits = filteredNegativeResults.filter((r: any) => r.found);
+  const hasNegativeInfo = negativeHits.length > 0 || fraudHits > 0;
+
+  let details = "";
+  if (!hasNegativeInfo) {
+    details = "ネガティブ情報は見つかりませんでした。";
+  } else {
+    if (fraudHits > 0) {
+      details = `詐欺情報サイトに${fraudHits}件の情報が見つかりました。`;
+    }
+    if (negativeHits.length > 0) {
+      details += ` Web検索で${negativeHits.map((r: any) => r.query).join('、')}に関する情報が見つかりました（AI判定済み）。`;
+    }
+  }
+
+  egoSearchResult.summary = {
+    hasNegativeInfo,
+    fraudHits,
+    details,
+  };
+}
+
+/**
+ * エゴサーチ結果の表示
+ */
+function printEgoSearchResult(name: string, company: string | undefined, result: any): void {
+  const header = company ? `  ${name}（${company}）` : `  ${name}`;
+
+  if (result.summary.hasNegativeInfo) {
+    console.log(`  ⚠️ ${header}`);
+
+    const fraudHits = result.fraudSiteResults.filter((r: any) => r.found);
+    if (fraudHits.length > 0) {
+      console.log(`     詐欺情報サイト: ${fraudHits.length}件検出`);
+    }
+
+    const negativeHits = result.negativeSearchResults.filter((r: any) => r.found);
+    if (negativeHits.length > 0) {
+      console.log(`     Web検索: ${negativeHits.map((r: any) => `"${r.query}"`).join('、')} - ${negativeHits.length}件検出`);
+      negativeHits.forEach((hit: any) => {
+        if (hit.results && hit.results.length > 0) {
+          hit.results.slice(0, 2).forEach((r: any, idx: number) => {
+            console.log(`       ${idx + 1}. ${r.title}`);
+            console.log(`          ${r.url}`);
+            if (r.aiReason) {
+              console.log(`          AI判定: ${r.aiReason}`);
+            }
+          });
+        }
+      });
+    }
+
+    console.log(`     詳細: ${result.summary.details}`);
+  } else {
+    console.log(`  ✓ ${header}`);
+    console.log(`     詐欺情報サイト: 該当なし`);
+    console.log(`     Web検索: ネガティブ情報なし`);
   }
 }
 
@@ -811,9 +1128,17 @@ function normalizeText(text: string): string {
 function printCompanyVerificationResultSimple(result: any): void {
   if (result.verified) {
     console.log(`  ✓ ${result.companyName}: 実在確認`);
-    if (result.websiteUrl) {
+    console.log(`     検証方法: ${result.verificationSource}`);
+
+    if (result.verificationSource === "公式サイト" && result.websiteUrl) {
       console.log(`     公式サイト: ${result.websiteUrl}`);
+    } else if (result.verificationSource === "第三者サイト" && result.verificationUrl) {
+      console.log(`     確認元URL: ${result.verificationUrl}`);
+      if (result.websiteUrl) {
+        console.log(`     公式サイト: ${result.websiteUrl}`);
+      }
     }
+
     console.log(`     信頼度: ${result.confidence}%`);
 
     if (result.businessDescription) {
@@ -833,33 +1158,6 @@ function printCompanyVerificationResultSimple(result: any): void {
     } else {
       console.log(`     公式サイト: なし`);
     }
-  }
-}
-
-/**
- * 代表者エゴサーチ結果の表示
- */
-function printRepresentativeEgoSearchResult(rep: any): void {
-  const result = rep.egoSearchResult;
-  
-  if (result.summary.hasNegativeInfo) {
-    console.log(`  ⚠️ ${rep.name}（${rep.company}）`);
-    
-    const fraudHits = result.fraudSiteResults.filter((r: any) => r.found);
-    if (fraudHits.length > 0) {
-      console.log(`     詐欺情報サイト: ${fraudHits.length}件検出`);
-    }
-    
-    const negativeHits = result.negativeSearchResults.filter((r: any) => r.found);
-    if (negativeHits.length > 0) {
-      console.log(`     Web検索: ${negativeHits.map((r: any) => `"${r.query}"`).join('、')} - ${negativeHits.length}件検出`);
-    }
-    
-    console.log(`     詳細: ${result.summary.details}`);
-  } else {
-    console.log(`  ✓ ${rep.name}（${rep.company}）`);
-    console.log(`     詐欺情報サイト: 該当なし`);
-    console.log(`     Web検索: ネガティブ情報なし`);
   }
 }
 

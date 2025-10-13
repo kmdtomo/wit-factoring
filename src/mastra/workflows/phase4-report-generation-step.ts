@@ -537,6 +537,8 @@ function formatPhase3Data(phase3: any): string {
     output += '**申込企業:**\n';
     output += `- 企業名: ${companies.申込企業.企業名 || '不明'}\n`;
     output += `- 公式サイト: ${companies.申込企業.公式サイト || 'なし'}\n`;
+    output += `- 確認方法: ${companies.申込企業.確認方法 || '未確認'}\n`;
+    output += `- 確認元URL: ${companies.申込企業.確認元URL || 'なし'}\n`;
     output += `- 信頼度: ${companies.申込企業.信頼度}%\n\n`;
   }
 
@@ -545,7 +547,16 @@ function formatPhase3Data(phase3: any): string {
     output += '**買取企業:**\n';
     output += `- 総数: ${companies.買取企業.総数}社\n`;
     output += `- 確認済み: ${companies.買取企業.確認済み}社\n`;
-    output += `- 未確認: ${companies.買取企業.未確認}社\n\n`;
+    output += `- 未確認: ${companies.買取企業.未確認}社\n`;
+
+    if (companies.買取企業.企業リスト && companies.買取企業.企業リスト.length > 0) {
+      output += '\n| 企業名 | 公式サイト | 確認方法 | 確認元URL | 信頼度 |\n';
+      output += '|--------|-----------|----------|----------|--------|\n';
+      companies.買取企業.企業リスト.forEach((c: any) => {
+        output += `| ${c.企業名} | ${c.公式サイト || 'なし'} | ${c.確認方法 || '未確認'} | ${c.確認元URL || 'なし'} | ${c.信頼度}% |\n`;
+      });
+    }
+    output += '\n';
   }
 
   // 担保企業
@@ -556,10 +567,10 @@ function formatPhase3Data(phase3: any): string {
     output += `- 未確認: ${companies.担保企業.未確認}社\n`;
 
     if (companies.担保企業.企業リスト && companies.担保企業.企業リスト.length > 0) {
-      output += '\n| 企業名 | 公式サイト | 信頼度 |\n';
-      output += '|--------|-----------|--------|\n';
+      output += '\n| 企業名 | 公式サイト | 確認方法 | 確認元URL | 信頼度 |\n';
+      output += '|--------|-----------|----------|----------|--------|\n';
       companies.担保企業.企業リスト.forEach((c: any) => {
-        output += `| ${c.企業名} | ${c.公式サイト || 'なし'} | ${c.信頼度}% |\n`;
+        output += `| ${c.企業名} | ${c.公式サイト || 'なし'} | ${c.確認方法 || '未確認'} | ${c.確認元URL || 'なし'} | ${c.信頼度}% |\n`;
       });
     }
     output += '\n';
@@ -606,14 +617,16 @@ function formatKintoneData(kintone: any): string {
 
   // 買取情報テーブル
   output += '#### 買取情報テーブル\n\n';
+  output += '**【重要】掛目は必ずこのテーブルの「掛目」フィールドの値を使用してください。買取額÷請求額を計算しないでください。**\n\n';
   const purchase = kintone.買取情報 || [];
   if (purchase.length > 0) {
-    output += '| 企業名 | 買取額 | 請求額 | 掛目 | 再契約の意思 |\n';
-    output += '|--------|--------|--------|------|-------------|\n';
+    output += '| 企業名 | 買取額 | 請求額 | 掛目（★この値を使用★） | 再契約の意思 |\n';
+    output += '|--------|--------|--------|------------------------|-------------|\n';
     purchase.forEach((p: any) => {
-      output += `| ${p.企業名 || ''} | ¥${(p.買取額 || 0).toLocaleString()} | ¥${(p.請求額 || 0).toLocaleString()} | ${p.掛目 || 0}% | ${p.再契約の意思 || ''} |\n`;
+      output += `| ${p.企業名 || ''} | ¥${(p.買取額 || 0).toLocaleString()} | ¥${(p.請求額 || 0).toLocaleString()} | **${p.掛目 || 0}%** | ${p.再契約の意思 || ''} |\n`;
     });
     output += '\n';
+    output += '**掛目の値: ' + (purchase[0]?.掛目 || 0) + '%（この値をそのまま使用）**\n\n';
   } else {
     output += '⚠️ データなし\n\n';
   }

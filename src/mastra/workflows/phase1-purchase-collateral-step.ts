@@ -175,7 +175,7 @@ export const phase1PurchaseCollateralStep = createStep({
           context: {
             recordId,
             purchaseDocuments: invoiceDocuments, // 請求書のみを渡す
-            model: "gemini-2.5-flash-lite",
+            model: "gemini-2.5-flash",
           },
           runtimeContext: new RuntimeContext(),
         });
@@ -204,7 +204,7 @@ export const phase1PurchaseCollateralStep = createStep({
         context: {
           recordId,
           collateralDocuments: ocrResult.collateralDocuments,
-          model: "gemini-2.5-flash-lite",
+          model: "gemini-2.5-flash",
         },
         runtimeContext: new RuntimeContext(),
       });

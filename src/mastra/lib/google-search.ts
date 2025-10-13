@@ -21,7 +21,7 @@ export async function performGoogleSearch(query: string): Promise<GoogleSearchRe
         key: apiKey,
         cx: searchEngineId,
         q: query,
-        num: 3, // 最大3件
+        num: 5, // 最大5件
         hl: 'ja', // 日本語優先
       },
     });
