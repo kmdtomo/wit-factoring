@@ -1,45 +1,31 @@
 import { Mastra } from '@mastra/core';
+import { kintoneFetchTool } from './tools/kintone-fetch-tool';
+// Google Vision APIツールはREST API経由で呼び出すため@grpc/grpc-js不要
+import { googleVisionPurchaseCollateralOcrTool } from './tools/google-vision-purchase-collateral-ocr-tool';
+import { purchaseVerificationToolMinimal } from './tools/purchase-verification-tool-minimal';
+import { collateralVerificationTool } from './tools/collateral-verification-tool';
+import { googleVisionBankStatementOcrToolImproved } from './tools/google-vision-bank-statement-ocr-tool-improved';
+import { googleVisionIdentityOcrTool } from './tools/google-vision-identity-ocr-tool';
+import { identityVerificationTool } from './tools/identity-verification-tool';
+import { egoSearchTool } from './tools/ego-search-tool';
+import { companyVerifyBatchTool } from './tools/company-verify-batch-tool';
+import { kintonePhase4DataTool } from './tools/kintone-phase4-data-tool';
 import { integratedWorkflow } from './workflows/integrated-workflow';
-import { createWorkflow } from '@mastra/core/workflows';
-import { phase1PurchaseCollateralStep } from './workflows/phase1-purchase-collateral-step';
-import { phase2BankStatementStep } from './workflows/phase2-bank-statement-step';
-import { phase3VerificationStep } from './workflows/phase3-verification-step';
-
-// 各フェーズを個別のワークフローとして作成
-const phase1Workflow = createWorkflow({
-  id: 'phase1-purchase-collateral',
-  description: 'Phase 1: 買取請求書と担保謄本の処理（OCR → 買取検証 → 担保検証）',
-  inputSchema: phase1PurchaseCollateralStep.inputSchema,
-  outputSchema: phase1PurchaseCollateralStep.outputSchema,
-})
-  .then(phase1PurchaseCollateralStep)
-  .commit();
-
-const phase2Workflow = createWorkflow({
-  id: 'phase2-bank-statement',
-  description: 'Phase 2: 通帳分析（OCR → AI分析・照合 → リスク検出）',
-  inputSchema: phase2BankStatementStep.inputSchema,
-  outputSchema: phase2BankStatementStep.outputSchema,
-})
-  .then(phase2BankStatementStep)
-  .commit();
-
-const phase3Workflow = createWorkflow({
-  id: 'phase3-verification',
-  description: 'Phase 3: 本人確認・企業実在性確認（本人確認OCR → エゴサーチ → 企業検証 → 代表者リスク検索）',
-  inputSchema: phase3VerificationStep.inputSchema,
-  outputSchema: phase3VerificationStep.outputSchema,
-})
-  .then(phase3VerificationStep)
-  .commit();
 
 export const mastra = new Mastra({
+  tools: {
+    kintoneFetchTool,
+    googleVisionPurchaseCollateralOcrTool,
+    purchaseVerificationToolMinimal,
+    collateralVerificationTool,
+    googleVisionBankStatementOcrToolImproved,
+    googleVisionIdentityOcrTool,
+    identityVerificationTool,
+    egoSearchTool,
+    companyVerifyBatchTool,
+    kintonePhase4DataTool,
+  },
   workflows: {
     integratedWorkflow,
-    phase1Workflow,
-    phase2Workflow,
-    phase3Workflow,
   },
-  // デプロイヤーの互換性のため、空のLLM設定を追加
-  llms: {},
 });
