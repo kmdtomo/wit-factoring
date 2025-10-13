@@ -40,4 +40,6 @@ export const mastra = new Mastra({
     phase2Workflow,
     phase3Workflow,
   },
+  // デプロイヤーの互換性のため、空のLLM設定を追加
+  llms: {},
 });

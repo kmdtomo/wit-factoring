@@ -5,5 +5,9 @@ export default defineConfig({
   build: {
     publicDir: 'docs',
   },
+  // デプロイヤーの互換性のため設定を追加
+  telemetry: {
+    enabled: false,
+  },
 });
 
