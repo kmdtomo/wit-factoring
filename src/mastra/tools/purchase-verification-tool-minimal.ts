@@ -56,7 +56,7 @@ export const purchaseVerificationToolMinimal = createTool({
       
       const record = recordResponse.data.records[0];
       const buyInfo = record.買取情報?.value || [];
-      
+
       // Kintoneデータの整形
       const kintoneData = {
         purchases: buyInfo.map((item: any) => ({
@@ -64,7 +64,9 @@ export const purchaseVerificationToolMinimal = createTool({
           amount: parseInt(item.value?.総債権額?.value || "0"),
         })),
         applicant: record.屋号?.value || record.会社名?.value || "",
-        totalAmount: buyInfo.reduce((sum: number, item: any) => 
+        businessType: record.種別?.value || "",
+        representativeName: record.代表者名?.value || "",
+        totalAmount: buyInfo.reduce((sum: number, item: any) =>
           sum + parseInt(item.value?.総債権額?.value || "0"), 0),
       };
       
@@ -75,10 +77,18 @@ export const purchaseVerificationToolMinimal = createTool({
         .map(doc => `【${doc.fileName}】\n${doc.text}`)
         .join("\n\n---\n\n");
       
-      // 3. プロンプト（申込者企業を除外）
+      // 3. プロンプト（申込者を除外）
+      // 除外対象リストを構築
+      const exclusionTargets = [kintoneData.applicant];
+      if (kintoneData.representativeName) {
+        exclusionTargets.push(kintoneData.representativeName);
+      }
+
       const analysisPrompt = `請求書から第三債務者（請求先企業）の企業名と金額を抽出してください。
 
-【重要】申込者企業（${kintoneData.applicant}）は第三債務者として抽出しないでください。
+【除外対象】
+以下は申込者自身を指すため、第三債務者として抽出しないでください：
+${exclusionTargets.map(target => `- ${target}`).join('\n')}
 
 OCRテキスト:
 ${combinedText.substring(0, 3000)}
@@ -92,9 +102,7 @@ ${kintoneData.purchases.map((p: any) => `${p.company}: ¥${p.amount.toLocaleStri
   "companies": [
     {"name": "第三債務者の企業名", "amount": 金額（数値）}
   ]
-}
-
-注意: 申込者企業（${kintoneData.applicant}）は除外してください。`;
+}`;
 
       console.log(`[購入検証-最小] AI分析開始`);
       const startTime = Date.now();
