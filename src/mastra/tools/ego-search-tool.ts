@@ -2,6 +2,7 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import axios from "axios";
 import { performGoogleSearch } from "../lib/google-search";
+import { performSerperSearch } from "../lib/serper-search";
 
 // エゴサーチツールの定義
 export const egoSearchTool = createTool({
@@ -118,6 +119,7 @@ export const egoSearchTool = createTool({
     }
     
     // ネガティブ情報検索（詐欺・逮捕のみ）
+    // Serper APIを使用（手動Google検索と同じ結果）
     const negativeSearchResults = [];
     const negativeQueries = [
       `${name} 詐欺`,
@@ -125,10 +127,10 @@ export const egoSearchTool = createTool({
       `${name} 容疑`,
       `${name} 被害`,
     ];
-    
+
     for (const query of negativeQueries) {
       try {
-        const results = await performGoogleSearch(query);
+        const results = await performSerperSearch(query);
         const hasResults = results && results.length > 0;
         
         // 全ての検索結果を返す（フィルタリングしない）
