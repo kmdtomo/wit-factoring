@@ -57,28 +57,51 @@ export const phase2BankStatementStep = createStep({
           })),
         }),
       }).optional(),
-      subBankAnalysis: z.object({
-        riskDetection: z.object({
-          gambling: z.array(z.object({
+      factoringAnalysis: z.object({
+        allTransactions: z.array(z.object({
+          companyName: z.string(),
+          date: z.string(),
+          amount: z.number(),
+          transactionType: z.enum(["入金", "出金"]),
+          payerOrPayee: z.string(),
+        })),
+        companyAnalysis: z.array(z.object({
+          companyName: z.string(),
+          inboundTransactions: z.array(z.object({
             date: z.string(),
             amount: z.number(),
-            destination: z.string(),
-            keyword: z.string(),
+            payerName: z.string(),
           })),
+          outboundTransactions: z.array(z.object({
+            date: z.string(),
+            amount: z.number(),
+            payeeName: z.string(),
+          })),
+          pairedTransactions: z.array(z.object({
+            inbound: z.object({ date: z.string(), amount: z.number() }),
+            outbound: z.object({ date: z.string(), amount: z.number() }),
+            status: z.enum(["完済", "一部返済"]),
+          })),
+          unpairedInbound: z.array(z.object({
+            date: z.string(),
+            amount: z.number(),
+            note: z.string(),
+          })),
+          actualStatus: z.enum(["完済済み", "契約中の可能性", "要確認"]),
+        })),
+        alerts: z.array(z.object({
+          type: z.enum(["複数社同時利用", "契約中複数社"]),
+          severity: z.enum(["警告", "注意"]),
+          message: z.string(),
+          details: z.string(),
+        })),
+        summary: z.object({
+          totalCompanies: z.number(),
+          activeContracts: z.number(),
+          completedContracts: z.number(),
+          hasSimultaneousContracts: z.boolean(),
         }),
-      }).optional(),
-      crossBankTransfers: z.array(z.object({
-        date: z.string(),
-        amount: z.number(),
-        from: z.string(),
-        to: z.string(),
-      })),
-      factoringCompanies: z.array(z.object({
-        companyName: z.string(),
-        date: z.string(),
-        amount: z.number(),
-        transactionType: z.string(),
-      })),
+      }),
     }),
     summary: z.object({
       processingTime: z.number(),
@@ -97,132 +120,85 @@ export const phase2BankStatementStep = createStep({
       const startTime = Date.now();
       
       // ========================================
-      // ステップ1: OCR処理
+      // ステップ1: OCR処理（メイン通帳のみ）
       // ========================================
-      console.log(`[Phase 2 - Step 1/4] OCR処理開始`);
+      console.log(`[Phase 2 - Step 1/3] OCR処理開始`);
       const ocrStartTime = Date.now();
-      
+
       const ocrResult = await googleVisionBankStatementOcrToolImproved.execute!({
         context: {
           recordId,
           mainBankFieldName: "メイン通帳＿添付ファイル",
-          subBankFieldName: "その他通帳＿添付ファイル",
+          subBankFieldName: "", // サブ通帳は使用しない
           maxPagesPerFile: 50,
         },
         runtimeContext: new RuntimeContext(),
       });
-      
+
       const ocrDuration = Date.now() - ocrStartTime;
-      console.log(`[Phase 2 - Step 1/4] OCR処理完了 - 処理時間: ${ocrDuration}ms`);
+      console.log(`[Phase 2 - Step 1/3] OCR処理完了 - 処理時間: ${ocrDuration}ms`);
       console.log(`  - メイン通帳: ${ocrResult.mainBankDocuments.length}件 (${ocrResult.mainBankDocuments.reduce((sum, doc) => sum + doc.pageCount, 0)}ページ)`);
-      console.log(`  - サブ通帳: ${ocrResult.subBankDocuments.length}件 (${ocrResult.subBankDocuments.reduce((sum, doc) => sum + doc.pageCount, 0)}ページ)`);
-      
+
       if (!ocrResult.success) {
         throw new Error(`OCR処理失敗: ${ocrResult.error}`);
       }
 
-      // 他社ファクタリング業者リスト（110社）
+      // 他社ファクタリング業者リスト（振込名ベース）
+      // 実際に通帳に表示される振込依頼人名で検出
       const factoringCompanies = [
-        "デュアルライフパートナーズ", "Dual Life Partners",
-        "GMOクリエイターズネットワーク",
-        "Payサポート", "ペイサポート",
-        "フリーナンス", "FREENANCE",
-        "グッドプラス",
-        "ベルトラ",
-        "NECキャピタルソリューション",
-        "OLTAクラウドファクタリング", "OLTA", "オルタ",
-        "SYS", "エスワイエス",
-        "アクセルファクター", "ACCEL FACTOR",
-        "エージーピージャパン", "AGP JAPAN",
-        "一般社団法人日本中小企業金融サポート機構",
-        "エムエスエフジェイ", "MSFJ",
-        "株式会社EMV",
-        "株式会社FFG",
-        "株式会社JTC",
-        "株式会社No.1", "ナンバーワン",
-        "株式会社SEICOサービス",
-        "株式会社PROTECT ONE",
-        "株式会社TRY",
-        "株式会社UPSIDER",
-        "株式会社インフォマート", "INFOMART",
-        "株式会社エスワイエス", "SYS",
-        "株式会社EVISTA",
-        "株式会社ケアプル", "CAREPL",
-        "株式会社セッション・アップ",
-        "株式会社アウタープル", "OUTERPULL",
-        "株式会社アクティブサポート",
-        "株式会社アクリ", "ACRI",
-        "株式会社アップス・エンド", "UPS END",
-        "株式会社アレシア",
-        "株式会社アンカーガーディアン",
-        "株式会社ウィット", "WIT",
-        "株式会社ウイング",
-        "株式会社エスコム", "ESCOM",
-        "株式会社エムエスライズ",
-        "株式会社オッティ", "OTTI",
-        "株式会社カイト", "KITE",
-        "株式会社グッドプラス",
-        "株式会社シレイタ", "SIREITA",
-        "株式会社トライスゲートウェイ",
-        "株式会社トラストゲートウェイ", "TRUST GATEWAY",
-        "株式会社ネクストワン",
-        "株式会社ハイフィール",
-        "株式会社バイカン", "BAIKAN",
-        "株式会社ビートレーディング", "BUY TRADING", "ビートレ",
-        "株式会社ペイトナー", "PAYTONAR", "ペイトナー",
-        "株式会社マネーフォワードケッサイ",
-        "株式会社メンターキャピタル",
-        "株式会社ライジングインノベーション", "RISING INNOVATION",
-        "株式会社ライトマネジメント",
-        "株式会社Wエンタープライズ",
-        "グローバルキャピタル",
-        "三共サービス", "SANKYO SERVICE",
-        "日本ネクストキャピタル",
-        "ビーエムシー", "BMC",
-        "ピーエムジー", "PMG",
-        "マイルド", "MILD",
-        "ラボル", "labol",
-        "株式会社ラボル",
-        "株式会社西日本ファクター",
-        "ANEW株式会社",
-        "FundingCloud",
-        "GMOペイメントゲートウェイ", "GMO",
-        "Ganx株式会社",
-        "株式会社ティーアンドエス", "T&S",
-        "株式会社ディーエムシー", "DMC",
-        "株式会社ファクタリングジャパン",
-        "株式会社ファンドワン", "FUND ONE",
-        "株式会社フィーディクス", "FEEDIX",
-        "株式会社三菱HCキャピタル",
-        "株式会社五常", "GOJYO",
-        "株式会社中小企業再生支援",
-        "株式会社事業資金エージェント",
-        "株式会社日本ビジネスリンクス",
-        "株式会社資金調達本舗",
+        "デュアルライフパートナーズ", "デュアルライフパートナーズ（カ）",
+        "オルタ", "オルタ（カ）", "OLTA",
+        "エージビジネスサポート", "エージビジネスサポート（カ）",
+        "エスワイエスコンサルタント", "カ）エスワイエスコンサルタント",
+        "VISTIA", "カ）VISTIA",
+        "アクセルファクター", "カ）アクセルファクター",
+        "インターテック", "カ）インターテック",
+        "ウィック", "カ）ウィック",
+        "バイオン", "カ）バイオン",
+        "ナカスキキング", "ナカスキキング（カ）",
+        "ビームサー", "ビームサー（カ）",
+        "ペイトナー", "ペイトナー（カ）",
+        "ラボル", "カ）ラボル", "labol",
+        "チエンジ", "カ）チエンジ",
+        "セイワビジネル", "セイワビジネル（カ）",
+        "ジャパンパートナーズ",
+        "プロスパーコンサルティング", "カ）プロスパーコンサルティング",
+        "ビーサスカ）", "ビーサス",
+        "ディーエムシー", "カ）ディーエムシー", "DMC",
+        "メッシュ", "カ）メッシュ",
+        "スリーエス", "カ）スリーエス",
+        "セレンディピティ", "シャ）セレンディピティ",
+        "フェニックス", "カ）フェニックス",
+        "サンライズ", "カ）サンライズ",
+        "ロコプラス", "カ）ロコプラス",
+        "アールエフディー", "アールエフディー（カ）",
+        "エイトラン", "カ）エイトラン",
+        "ドエスクダブリュ",
+        "エスシーメディカル", "カ）エスシーメディカル",
+        "ジーシーエム", "カ）ジーシーエム", "GCM",
+        "エスケーサービス", "カ）エスケーサービス",
+        "ワモ", "カ）ワモ", "WAMO",
+        "クイックファクター",
+        "オンファクト", "カ）オンファクト",
+        "プロクレス", "カ）プロクレス",
+        "ビーケーパートナー", "カ）ビーケーパートナー",
+        "フェイス", "カ）フェイス",
+        "スリーアイ", "カ）スリーアイ",
+        "ティワン", "カ）ティワン",
+        "リクシス", "カ）リクシス", "LIXIS",
+        "アルトゥル", "カ）アルトゥル",
+        "テーブルプラス", "カ）テーブルプラス",
+        "ビジネクション", "BUSINECTION",
+        "スマートバンク", "カ）スマートバンク",
+        "エコテックポリマー", "エコテックポリマー（カ）",
+        "エスイーシステム", "エスイーシステム（カ）",
+        // 以下、従来のリストから重要なものを追加（振込名が不明なもの）
         "QuQuMo", "ククモ",
-        "アースファクター",
-        "エヌファクター", "N-FACTOR",
-        "コバンザメ",
-        "トップマネジメント",
-        "ハンズトレード",
-        "ベストファクター", "BEST FACTOR",
-        "ユアファクター",
-        "株式会社Hondaa",
-        "株式会社PROTECTER ONE",
-        "株式会社オーティーアイ", "OTI",
-        "株式会社ライズ", "RISE",
-        "株式会社ANIHEN LINK",
-        "株式会社エスアール", "SR",
-        "株式会社トラップコミュニケーション",
-        "各務資財リサイクル",
-        "株式会社LM9",
-        "株式会社LUMIA",
-        "株式会社Soluno",
-        "株式会社ワークルズ", "WORKLES",
-        "BUSINESSPARTNER株式会社",
-        "株式会社電子の森の映画館の当時の株式会社ビットネック",
-        "エコテックポリマー株式会社",
-        "サークルシップホールディングス株式会社",
+        "FREENANCE", "フリーナンス",
+        "GMOクリエイターズネットワーク",
+        "ビートレーディング", "ビートレ",
+        "MSFJ", "エムエスエフジェイ",
+        "No.1", "ナンバーワン",
       ];
 
       // ギャンブル関連キーワードリスト（全体スコープで定義）
@@ -300,8 +276,10 @@ ${collaterals.map((c: any, idx: number) =>
 ).join('\n')}
 
 # ========================================
-# 【重要】他社ファクタリング業者リスト（110社）
-# このリストに記載された業者のみ検出対象
+# 【重要】他社ファクタリング業者リスト（振込名ベース）
+# このリストは実際に通帳に表示される振込依頼人名
+# 振込名フィールドにこれらの名前が含まれる場合のみ検出
+# 摘要欄のみに含まれる場合は検出しない
 # ========================================
 ${factoringCompanies.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
@@ -356,9 +334,34 @@ ${gamblingKeywords.map((k, i) => `${i + 1}. ${k}`).join('\n')}
    取引: 2025-09-05、-20,000円、「GMOペイメント マルハン」
    → 検出しない（GMO経由）
 
-4. 他社ファクタリング業者検出
-   - 振込元/振込先名に上記業者リストのいずれかが含まれている取引のみ検出
-   - 除外: 「セゾン」「アメックス」「SMBC」はクレジットカード会社・銀行のため検出しない
+4. 他社ファクタリング取引分析（詳細版）
+
+【検出フェーズ - 振込名優先】
+- **振込依頼人名（振込名フィールド）**に業者名が含まれる場合のみ検出
+  - 入金取引: 振込元（振込依頼人名）に業者名が含まれる
+  - 出金取引: 振込先（振込依頼人名）に業者名が含まれる
+- **摘要欄のみ**に業者名が含まれる場合は検出しない
+- 除外: クレカ/決済代行経由（セゾン、アメックス、SMBC、GMOペイメント等）
+- **重要**: 「マネーフォワード」単体は除外、「マネーフォワードケッサイ」「カ）ラボル」「ラボル」は検出
+
+【ペアリングフェーズ】
+各業者について以下を分析:
+1. 入金取引を時系列で取得
+2. 各入金に対して、その後の出金で金額が近い取引を検索
+3. ペアリング条件:
+   - 入金日 < 出金日（時系列）
+   - 出金金額が入金金額の90-115%の範囲内（手数料込み）
+   - 同一業者
+
+【判定ルール】
+- ✅ 入金・出金ペア成立 → status="完済", note=""
+- ⚠️ 入金のみで出金なし（60日以上経過） → status="契約中の可能性", note="申込者に契約状況を確認してください"
+- ⚠️ 入金のみで出金なし（60日未満） → status="要確認", note="返済期日前の可能性あり。申込者に確認してください"
+- ✅ 出金のみで入金なし → status="完済済み", note="入金が通帳期間外"
+
+【アラート条件】
+- 同月（±15日以内）に2社以上から入金 → alert type="複数社同時利用"
+- 未完済（契約中の可能性）の業者が2社以上 → alert type="契約中複数社"
 
 
 JSON形式で出力してください。`;
@@ -411,15 +414,59 @@ JSON形式で出力してください。`;
               keyword: z.enum(gamblingKeywords as [string, ...string[]]).describe("上記ギャンブルキーワードリストから選択（リストにない場合は出力しない）"),
             })),
           }),
-          factoringCompaniesDetected: z.array(z.object({
-            companyName: z.string().describe("検出された業者名"),
-            date: z.string(),
-            amount: z.number(),
-            payerOrPayee: z.string().describe("通帳記載の相手先名"),
-            transactionType: z.enum(["入金", "出金"]),
-          })),
+          factoringAnalysis: z.object({
+            allTransactions: z.array(z.object({
+              companyName: z.string().describe("検出された業者名"),
+              date: z.string().describe("取引日（YYYY-MM-DD形式）"),
+              amount: z.number().describe("取引金額（入金はプラス、出金はマイナス）"),
+              transactionType: z.enum(["入金", "出金"]),
+              payerOrPayee: z.string().describe("通帳記載の相手先名"),
+            })).describe("検出された全ての他社ファクタリング取引"),
+            companyAnalysis: z.array(z.object({
+              companyName: z.string(),
+              inboundTransactions: z.array(z.object({
+                date: z.string(),
+                amount: z.number(),
+                payerName: z.string(),
+              })).describe("この業者からの入金取引（業者→申込者）"),
+              outboundTransactions: z.array(z.object({
+                date: z.string(),
+                amount: z.number(),
+                payeeName: z.string(),
+              })).describe("この業者への出金取引（申込者→業者）"),
+              pairedTransactions: z.array(z.object({
+                inbound: z.object({
+                  date: z.string(),
+                  amount: z.number(),
+                }),
+                outbound: z.object({
+                  date: z.string(),
+                  amount: z.number(),
+                }),
+                status: z.enum(["完済", "一部返済"]),
+              })).describe("ペアリングできた入出金（完済済み）"),
+              unpairedInbound: z.array(z.object({
+                date: z.string(),
+                amount: z.number(),
+                note: z.string().describe("確認事項メモ"),
+              })).describe("ペアリングできない入金（契約中の可能性）"),
+              actualStatus: z.enum(["完済済み", "契約中の可能性", "要確認"]),
+            })).describe("業者ごとの取引分析"),
+            alerts: z.array(z.object({
+              type: z.enum(["複数社同時利用", "契約中複数社"]),
+              severity: z.enum(["警告", "注意"]),
+              message: z.string(),
+              details: z.string(),
+            })),
+            summary: z.object({
+              totalCompanies: z.number().describe("検出業者数"),
+              activeContracts: z.number().describe("契約中の可能性がある業者数"),
+              completedContracts: z.number().describe("完済済み業者数"),
+              hasSimultaneousContracts: z.boolean().describe("複数社同時利用フラグ"),
+            }),
+          }),
         });
-        
+
         const result = await generateObject({
           model: google("gemini-2.5-flash"),
           prompt: analysisPrompt,
@@ -516,225 +563,93 @@ JSON形式で出力してください。`;
           console.log(`  検出なし`);
         }
 
-        console.log(`\n${"━".repeat(80)}\n`);
-      } else {
-        console.log(`\n[Phase 2 - Step 2/4] メイン通帳分析スキップ（ファイルなし）`);
-      }
-      
-      // ========================================
-      // ステップ3: サブ通帳AI分析
-      // ========================================
-      let subBankAnalysis: any = null;
-      let subBankAICost = 0;
-      
-      if (ocrResult.subBankDocuments.length > 0) {
-        console.log(`\n[Phase 2 - Step 3/4] サブ通帳AI分析開始`);
-        const subBankStartTime = Date.now();
-        
-        const subBankText = ocrResult.subBankDocuments
-          .map(doc => `【${doc.fileName}】\n${doc.text}`)
-          .join("\n\n---\n\n");
-        
-        const subAnalysisPrompt = `サブ通帳（個人口座）を分析し、ギャンブルリスク検出と他社ファクタリング業者検出を行ってください。
+        // 他社ファクタリング分析の表示
+        console.log(`\n＜他社ファクタリング取引分析＞`);
+        const factoringAnalysis = mainBankAnalysis.factoringAnalysis;
 
-# 通帳データ
-${subBankText}
+        console.log(`\n【サマリー】`);
+        console.log(`  検出業者: ${factoringAnalysis.summary.totalCompanies}社`);
+        console.log(`  完済済み: ${factoringAnalysis.summary.completedContracts}社`);
+        console.log(`  契約中の可能性: ${factoringAnalysis.summary.activeContracts}社`);
 
-# ========================================
-# 【重要】他社ファクタリング業者リスト（110社）
-# このリストに記載された業者のみ検出対象
-# ========================================
-${factoringCompanies.map((c, i) => `${i + 1}. ${c}`).join('\n')}
+        if (factoringAnalysis.companyAnalysis.length > 0) {
+          console.log(`\n【業者別分析】\n`);
 
-# ========================================
-# 【重要】ギャンブル関連キーワード
-# このリストに記載されたキーワードのみ検出対象
-# ========================================
-${gamblingKeywords.map((k, i) => `${i + 1}. ${k}`).join('\n')}
+          factoringAnalysis.companyAnalysis.forEach((company: any) => {
+            console.log(`━━━ ${company.companyName} ━━━`);
 
-# タスク
-1. 全取引を抽出（日付、金額、振込元/先、摘要。入金=プラス、出金=マイナス）
+            // 入金取引
+            if (company.inboundTransactions.length > 0) {
+              console.log(`  📥 入金: ${company.inboundTransactions.length}件`);
+              company.inboundTransactions.forEach((tx: any) => {
+                console.log(`     ${tx.date}: ¥${tx.amount.toLocaleString()} ← 「${tx.payerName}」`);
+              });
+            } else {
+              console.log(`  📥 入金: なし`);
+            }
 
-2. ギャンブルリスク検出
-   **検出条件:**
-   - キーワードが主要部分として含まれる出金取引のみ検出
-   - 除外: クレカ/決済代行経由（SMBC、GMO、JCB等）、税金/公金サービス（RKS等）、口座振替、企業名に偶然含まれるケース
+            // 出金取引
+            if (company.outboundTransactions.length > 0) {
+              console.log(`  📤 出金: ${company.outboundTransactions.length}件`);
+              company.outboundTransactions.forEach((tx: any) => {
+                console.log(`     ${tx.date}: ¥${tx.amount.toLocaleString()} → 「${tx.payeeName}」`);
+              });
+            } else {
+              console.log(`  📤 出金: なし`);
+            }
 
-   【Few-Shot Examples】
-   正例1: 直接送金 → 検出
-   取引: 2025-08-15、-50,000円、「ウィンチケット」
-   → {"date": "08-15", "amount": -50000, "destination": "ウィンチケット", "keyword": "ウィンチケット"}
+            // ペアリング結果
+            if (company.pairedTransactions.length > 0) {
+              console.log(`  ✅ 完済取引: ${company.pairedTransactions.length}ペア`);
+              company.pairedTransactions.forEach((pair: any) => {
+                console.log(`     入金 ${pair.inbound.date} ¥${pair.inbound.amount.toLocaleString()} → 出金 ${pair.outbound.date} ¥${pair.outbound.amount.toLocaleString()} (${pair.status})`);
+              });
+            }
 
-   正例2: クレカ経由 → 検出しない
-   取引: 2025-08-20、-30,000円、「SMBC カード ウィンチケット」
-   → 検出しない（SMBC経由）
+            // 未ペア入金
+            if (company.unpairedInbound.length > 0) {
+              console.log(`  ⚠️ 未返済入金: ${company.unpairedInbound.length}件`);
+              company.unpairedInbound.forEach((tx: any) => {
+                console.log(`     ${tx.date}: ¥${tx.amount.toLocaleString()}`);
+                console.log(`     📝 ${tx.note}`);
+              });
+            }
 
-   正例3: 企業名偶然含まれる → 検出しない
-   取引: 2025-08-10、-100,000円、「マルハニチロ株式会社」
-   → 検出しない（食品会社）
-
-   正例4: 決済代行経由 → 検出しない
-   取引: 2025-09-05、-20,000円、「GMOペイメント マルハン」
-   → 検出しない（GMO経由）
-
-3. 他社ファクタリング業者検出
-   - 振込元/振込先名に上記業者リストのいずれかが含まれている取引のみ検出
-   - 除外: 「セゾン」「アメックス」「SMBC」はクレジットカード会社・銀行のため検出しない
-
-JSON形式で出力してください。`;
-
-        const subSchema = z.object({
-          riskDetection: z.object({
-            gambling: z.array(z.object({
-              date: z.string(),
-              amount: z.number(),
-              destination: z.string(),
-              keyword: z.enum(gamblingKeywords as [string, ...string[]]).describe("上記ギャンブルキーワードリストから選択（リストにない場合は出力しない）"),
-            })),
-          }),
-          factoringCompaniesDetected: z.array(z.object({
-            companyName: z.string().describe("検出された業者名"),
-            date: z.string(),
-            amount: z.number(),
-            payerOrPayee: z.string().describe("通帳記載の相手先名"),
-            transactionType: z.enum(["入金", "出金"]),
-          })),
-        });
-        
-        const subResult = await generateObject({
-          model: google("gemini-2.5-flash"),
-          prompt: subAnalysisPrompt,
-          schema: subSchema,
-        });
-
-        subBankAnalysis = subResult.object;
-
-        const inputTokens = subResult.usage?.inputTokens || Math.ceil(subAnalysisPrompt.length / 4);
-        const outputTokens = subResult.usage?.outputTokens || Math.ceil(JSON.stringify(subResult.object).length / 4);
-        // GPT-4.1コスト: 入力 $0.000003/token, 出力 $0.000012/token
-        subBankAICost = (inputTokens * 0.000003) + (outputTokens * 0.000012);
-        
-        const subBankDuration = Date.now() - subBankStartTime;
-        console.log(`[Phase 2 - Step 3/4] サブ通帳AI分析完了 - 処理時間: ${subBankDuration}ms`);
-        
-        // 結果表示
-        console.log(`\n${"━".repeat(80)}`);
-        console.log(`サブ通帳分析結果`);
-        console.log(`${"━".repeat(80)}\n`);
-        
-        console.log(`【リスク検出】\n`);
-
-        console.log(`＜ギャンブル＞`);
-        console.log(`  検出ルール: 30種以上（ウィンチケット、マルハン、ダイナム、ベラジョン、競馬、パチンコ等）`);
-        if (subBankAnalysis.riskDetection.gambling.length > 0) {
-          console.log(`  ⚠️ 検出: ${subBankAnalysis.riskDetection.gambling.length}件`);
-          subBankAnalysis.riskDetection.gambling.forEach((g: any, idx: number) => {
-            console.log(`    ${idx + 1}. ${g.date}: -¥${Math.abs(g.amount).toLocaleString()} → 「${g.destination}」`);
-            console.log(`       一致キーワード: 「${g.keyword}」`);
+            // 状態
+            const statusIcon = company.actualStatus === "完済済み" ? "✅" : "⚠️";
+            console.log(`  ${statusIcon} 状態: ${company.actualStatus}`);
+            console.log();
           });
-        } else {
-          console.log(`  検出なし`);
         }
 
-        console.log(`\n${"━".repeat(80)}\n`);
-      } else {
-        console.log(`\n[Phase 2 - Step 3/4] サブ通帳分析スキップ（ファイルなし）`);
-      }
-      
-      // ========================================
-      // ステップ4: 統合分析（通帳間資金移動・他社ファクタリング）
-      // ========================================
-      console.log(`\n[Phase 2 - Step 4/4] 統合分析開始`);
-
-      // 他社ファクタリング業者検出を統合
-      const factoringCompaniesDetected: any[] = [];
-
-      // 担保企業名のリストを取得（誤検出を防ぐため）
-      const collateralCompanyNames = collaterals.map((c: any) => c.会社名);
-
-      // クレジットカード会社・銀行などの除外リスト
-      const excludedCompanies = ["セゾン", "アメックス", "SMBC", "JC", "IB", "AP", "RKS"];
-
-      if (mainBankAnalysis && mainBankAnalysis.factoringCompaniesDetected) {
-        // 担保企業とクレジットカード会社・銀行を除外
-        const filtered = mainBankAnalysis.factoringCompaniesDetected.filter((f: any) => {
-          const isCollateral = collateralCompanyNames.some((name: string) =>
-            f.companyName.includes(name) || name.includes(f.companyName)
-          );
-          const isExcluded = excludedCompanies.some((excluded: string) =>
-            f.companyName.includes(excluded) || f.payerOrPayee.includes(excluded)
-          );
-          return !isCollateral && !isExcluded;
-        });
-        factoringCompaniesDetected.push(...filtered);
-      }
-
-      if (subBankAnalysis && subBankAnalysis.factoringCompaniesDetected) {
-        // 担保企業とクレジットカード会社・銀行を除外
-        const filtered = subBankAnalysis.factoringCompaniesDetected.filter((f: any) => {
-          const isCollateral = collateralCompanyNames.some((name: string) =>
-            f.companyName.includes(name) || name.includes(f.companyName)
-          );
-          const isExcluded = excludedCompanies.some((excluded: string) =>
-            f.companyName.includes(excluded) || f.payerOrPayee.includes(excluded)
-          );
-          return !isCollateral && !isExcluded;
-        });
-        factoringCompaniesDetected.push(...filtered);
-      }
-
-      // 通帳間資金移動検出（メイン通帳とサブ通帳の両方がある場合のみ）
-      const crossBankTransfers: any[] = [];
-
-      if (mainBankAnalysis && subBankAnalysis) {
-        // TODO: 将来的に実装
-        // メイン通帳の出金とサブ通帳の入金を照合
-        // 前後1日以内、±1,000円以内の取引をペアリング
-        console.log(`  ⚠️ 通帳間資金移動検出: 未実装（Phase 4で対応予定）`);
-      } else {
-        // メイン通帳のみまたはサブ通帳のみの場合は通帳間移動は不可能
-        console.log(`  通帳間資金移動検出: スキップ（サブ通帳なし）`);
-      }
-
-      console.log(`[Phase 2 - Step 4/4] 統合分析完了`);
-      console.log(`  - 通帳間資金移動: ${crossBankTransfers.length}件`);
-      console.log(`  - 他社ファクタリング: ${factoringCompaniesDetected.length}件`);
-      
-      if (crossBankTransfers.length > 0 || factoringCompaniesDetected.length > 0) {
-        console.log(`\n${"━".repeat(80)}`);
-        console.log(`統合分析結果`);
-        console.log(`${"━".repeat(80)}\n`);
-        
-        if (crossBankTransfers.length > 0) {
-          console.log(`【通帳間資金移動】`);
-          console.log(`  検出ルール: 前後1日以内、±1,000円以内の入出金\n`);
-          crossBankTransfers.forEach((t, idx) => {
-            console.log(`  ${idx + 1}. ${t.date}: ¥${t.amount.toLocaleString()}`);
-            console.log(`     ${t.from} → ${t.to}`);
+        // アラート表示
+        if (factoringAnalysis.alerts.length > 0) {
+          console.log(`【🚨 アラート】\n`);
+          factoringAnalysis.alerts.forEach((alert: any, idx: number) => {
+            const icon = alert.severity === "警告" ? "🚨" : "⚠️";
+            console.log(`  ${icon} ${alert.type}`);
+            console.log(`     ${alert.message}`);
+            console.log(`     詳細: ${alert.details}`);
           });
           console.log();
         }
-        
-        if (factoringCompaniesDetected.length > 0) {
-          console.log(`【他社ファクタリング業者検出】`);
-          console.log(`  検出ルール: 110社の業者リストと照合（GMO、OLTA、ビートレーディング、ペイトナー等）\n`);
-          console.log(`  ⚠️ 検出: ${factoringCompaniesDetected.length}件`);
-          factoringCompaniesDetected.forEach((f, idx) => {
-            const sign = f.transactionType === "入金" ? "+" : "-";
-            console.log(`    ${idx + 1}. ${f.date}: ${sign}¥${Math.abs(f.amount).toLocaleString()} (${f.transactionType})`);
-            console.log(`       業者名: 「${f.companyName}」`);
-            console.log(`       通帳記載: 「${f.payerOrPayee}」`);
-          });
-        }
-        
-        console.log(`\n${"━".repeat(80)}\n`);
+
+        console.log(`${"━".repeat(80)}\n`);
+      } else {
+        console.log(`\n[Phase 2 - Step 2/3] メイン通帳分析スキップ（ファイルなし）`);
       }
+
+
+      // ========================================
+      // ステップ3: 結果サマリー生成
+      // ========================================
+      console.log(`\n[Phase 2 - Step 3/3] 結果サマリー生成`);
       
       // ========================================
       // 結果のサマリー生成
       // ========================================
       const totalDuration = Date.now() - startTime;
-      const totalCost = ocrResult.costAnalysis.googleVisionCost + mainBankAICost + subBankAICost;
+      const totalCost = ocrResult.costAnalysis.googleVisionCost + mainBankAICost;
 
       console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
       console.log(`Phase 2 処理完了`);
@@ -745,13 +660,13 @@ JSON形式で出力してください。`;
         const matchedCount = mainBankAnalysis.collateralMatches.filter((m: any) =>
           m.monthlyAnalysis.some((ma: any) => ma.matched)
         ).length;
-        const gamblingTotal = mainBankAnalysis.riskDetection.gambling.length +
-          (subBankAnalysis?.riskDetection.gambling.length || 0);
+        const gamblingTotal = mainBankAnalysis.riskDetection.gambling.length;
+        const factoringTotal = mainBankAnalysis.factoringAnalysis.summary.totalCompanies;
+        const activeFactoring = mainBankAnalysis.factoringAnalysis.summary.activeContracts;
         console.log(`  担保企業照合: ${matchedCount}/${totalMatches}社`);
         console.log(`  ギャンブル検出: ${gamblingTotal}件`);
+        console.log(`  他社ファクタリング: ${factoringTotal}社検出（契約中の可能性: ${activeFactoring}社）`);
       }
-      console.log(`  通帳間資金移動: ${crossBankTransfers.length}件`);
-      console.log(`  他社ファクタリング: ${factoringCompaniesDetected.length}件`);
       console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
 
       // 簡潔でわかりやすい出力構造
@@ -771,22 +686,24 @@ JSON形式で出力してください。`;
                 actualSource: ma.actualSource || "不明",
                 matched: ma.matched,
                 matchType: ma.matchType,
+                confidence: ma.confidence || 0,
                 matchedTransactions: ma.matchedTransactions || [],
                 unmatchedTransactions: ma.unmatchedTransactions || [],
               })),
             })),
             riskDetection: mainBankAnalysis.riskDetection,
           } : undefined,
-          subBankAnalysis: subBankAnalysis ? {
-            riskDetection: subBankAnalysis.riskDetection,
-          } : undefined,
-          crossBankTransfers,
-          factoringCompanies: factoringCompaniesDetected.map((f: any) => ({
-            companyName: f.companyName,
-            date: f.date,
-            amount: f.amount,
-            transactionType: f.transactionType,
-          })),
+          factoringAnalysis: mainBankAnalysis ? mainBankAnalysis.factoringAnalysis : {
+            allTransactions: [],
+            companyAnalysis: [],
+            alerts: [],
+            summary: {
+              totalCompanies: 0,
+              activeContracts: 0,
+              completedContracts: 0,
+              hasSimultaneousContracts: false,
+            },
+          },
         },
         summary: {
           processingTime: totalDuration / 1000,

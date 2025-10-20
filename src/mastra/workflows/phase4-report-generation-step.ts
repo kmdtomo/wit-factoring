@@ -257,13 +257,21 @@ function buildInputData(
         collateralMatches: [],
         riskDetection: {
           gambling: [],
-          otherFactoring: [],
-          largeCashWithdrawals: [],
         },
       },
 
-      // ファクタリング業者リスト
-      factoringCompanies: phase2Results?.factoringCompanies || [],
+      // 他社ファクタリング分析
+      factoringAnalysis: phase2Results?.factoringAnalysis || {
+        allTransactions: [],
+        companyAnalysis: [],
+        alerts: [],
+        summary: {
+          totalCompanies: 0,
+          activeContracts: 0,
+          completedContracts: 0,
+          hasSimultaneousContracts: false,
+        },
+      },
     },
 
     // Phase 3: 本人確認・企業実在性（実際のスキーマに合わせる）
@@ -476,19 +484,49 @@ function formatPhase2Data(phase2: any): string {
     output += '✅ 検出なし\n\n';
   }
 
-  // 他社ファクタリング検出
-  output += '**他社ファクタリング検出:**\n\n';
-  const factoring = phase2.factoringCompanies || [];
-  if (factoring.length > 0) {
-    output += `⚠️ ${factoring.length}件検出\n\n`;
-    output += '| 日付 | 業者名 | 金額 | 種別 |\n';
-    output += '|------|--------|------|------|\n';
-    factoring.forEach((f: any) => {
-      const sign = f.transactionType === '入金' ? '+' : '-';
-      output += `| ${f.date} | ${f.companyName} | ${sign}¥${Math.abs(f.amount).toLocaleString()} | ${f.transactionType} |\n`;
-    });
+  // 他社ファクタリング取引分析
+  output += '**他社ファクタリング取引分析:**\n\n';
+  const factoringAnalysis = phase2.factoringAnalysis;
+
+  if (factoringAnalysis && factoringAnalysis.summary.totalCompanies > 0) {
+    output += `検出業者数: ${factoringAnalysis.summary.totalCompanies}社\n`;
+    output += `完済済み: ${factoringAnalysis.summary.completedContracts}社\n`;
+    output += `契約中の可能性: ${factoringAnalysis.summary.activeContracts}社\n\n`;
+
+    // 業者別分析
+    if (factoringAnalysis.companyAnalysis && factoringAnalysis.companyAnalysis.length > 0) {
+      output += '| 業者名 | 入金 | 出金 | 状態 | 確認事項 |\n';
+      output += '|--------|------|------|------|----------|\n';
+
+      factoringAnalysis.companyAnalysis.forEach((company: any) => {
+        const inboundCount = company.inboundTransactions.length;
+        const outboundCount = company.outboundTransactions.length;
+        const inboundTotal = company.inboundTransactions.reduce((sum: number, tx: any) => sum + tx.amount, 0);
+        const outboundTotal = company.outboundTransactions.reduce((sum: number, tx: any) => sum + tx.amount, 0);
+
+        const statusIcon = company.actualStatus === '完済済み' ? '✅' : '⚠️';
+
+        let note = '';
+        if (company.unpairedInbound && company.unpairedInbound.length > 0) {
+          note = company.unpairedInbound[0].note;
+        }
+
+        output += `| ${company.companyName} | ${inboundCount}件 (¥${inboundTotal.toLocaleString()}) | ${outboundCount}件 (¥${outboundTotal.toLocaleString()}) | ${statusIcon} ${company.actualStatus} | ${note} |\n`;
+      });
+      output += '\n';
+    }
+
+    // アラート
+    if (factoringAnalysis.alerts && factoringAnalysis.alerts.length > 0) {
+      output += '**🚨 アラート:**\n\n';
+      factoringAnalysis.alerts.forEach((alert: any) => {
+        const icon = alert.severity === '警告' ? '🚨' : '⚠️';
+        output += `${icon} **${alert.type}**: ${alert.message}\n`;
+        output += `- 詳細: ${alert.details}\n\n`;
+      });
+    }
   } else {
-    output += '✅ 検出なし\n';
+    output += '✅ 検出なし\n\n';
   }
 
   return output;
@@ -508,7 +546,40 @@ function formatPhase3Data(phase3: any): string {
   output += `- 検出人数: ${identity.検出人数 || 0}人\n`;
   output += `- 一致人数: ${identity.一致人数 || 0}人\n`;
 
-  if (identity.一致人物) {
+  // OCR抽出値とKintone期待値の詳細比較
+  if (identity.抽出された人物情報 && identity.抽出された人物情報.length > 0) {
+    const person = identity.抽出された人物情報[0]; // 最初の人物を表示
+    output += '\n**OCRで抽出された人物情報:**\n';
+    output += `- 氏名: ${person.氏名 || '不明'}\n`;
+    output += `- 生年月日: ${person.生年月日 || '不明'}\n`;
+    output += `- 住所: ${person.住所 || '不明'}\n`;
+    
+    output += '\n**Kintone期待値との照合:**\n';
+    
+    // 氏名照合
+    if (identity.Kintone期待値?.代表者名) {
+      if (person.氏名一致) {
+        output += `- ✅ 氏名一致（${person.氏名}）\n`;
+      } else {
+        output += `- ❌ 氏名不一致（OCR抽出: ${person.氏名} / Kintone期待値: ${identity.Kintone期待値.代表者名}）→ OCRの読み取りミスの可能性あり。要目視確認\n`;
+      }
+    }
+    
+    // 生年月日照合
+    if (identity.Kintone期待値?.生年月日) {
+      if (person.生年月日一致) {
+        output += `- ✅ 生年月日一致（${person.生年月日}）\n`;
+      } else {
+        output += `- ❌ 生年月日不一致（OCR抽出: ${person.生年月日} / Kintone期待値: ${identity.Kintone期待値.生年月日}）\n`;
+      }
+    }
+    
+    // 住所照合（一致判定がない場合は表示のみ）
+    if (person.住所) {
+      output += `- ✅ 住所: ${person.住所}\n`;
+    }
+  } else if (identity.一致人物) {
+    // 旧形式の対応（一致人物のみ表示）
     output += '\n**一致した人物:**\n';
     output += `- 氏名: ${identity.一致人物.氏名}\n`;
     output += `- 生年月日: ${identity.一致人物.生年月日}\n`;

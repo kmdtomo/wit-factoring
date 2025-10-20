@@ -561,6 +561,18 @@ export const phase3VerificationStep = createStep({
         生年月日: identityResult.matchedPerson.birthDate || "不明",
         住所: identityResult.matchedPerson.address || "不明",
       } : undefined,
+      // OCR抽出値とKintone期待値の詳細比較（Phase 4で表示）
+      抽出された人物情報: identityResult.persons ? identityResult.persons.map((person: any) => ({
+        氏名: person.name,
+        生年月日: person.birthDate || "不明",
+        住所: person.address || "不明",
+        氏名一致: person.nameMatch || false,
+        生年月日一致: person.birthDateMatch || false,
+      })) : [],
+      Kintone期待値: identityResult.processingDetails ? {
+        代表者名: identityResult.processingDetails.expectedName || "不明",
+        生年月日: identityResult.processingDetails.expectedBirthDate || "不明",
+      } : undefined,
       会社情報: (identityResult.companyInfo && identityResult.companyInfo.companyName) ? {
         会社名: identityResult.companyInfo.companyName || "不明",
         会社名照合: identityResult.companyInfo.companyNameMatch ? "✓ 一致" : "✗ 不一致",
