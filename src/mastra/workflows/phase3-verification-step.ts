@@ -56,7 +56,11 @@ export const phase3VerificationStep = createStep({
         詐欺情報サイト: z.number(),
         Web検索: z.number(),
         詳細: z.string(),
-        URL: z.string().optional().describe("ネガティブ情報が見つかった場合のURL"),
+        ネガティブURL一覧: z.array(z.object({
+          タイトル: z.string(),
+          URL: z.string(),
+          ソース: z.string().describe("詐欺情報サイト or Web検索(クエリ名)"),
+        })).optional().describe("ネガティブ情報が見つかった全てのURL"),
       }),
       企業実在性: z.object({
         申込企業: z.object({
@@ -589,20 +593,33 @@ export const phase3VerificationStep = createStep({
     };
 
     // 申込者エゴサーチのサマリー
-    // ネガティブ情報が見つかった場合、最初のURLを取得
-    let negativeURL: string | undefined = undefined;
+    // ネガティブ情報が見つかった場合、全てのURLを収集
+    const negativeURLs: Array<{ タイトル: string; URL: string; ソース: string }> = [];
+
     if (applicantEgoSearch.summary.hasNegativeInfo) {
-      // 詐欺サイトのURLを優先
-      const fraudSiteWithURL = applicantEgoSearch.fraudSiteResults.find((r: any) => r.found && r.url);
-      if (fraudSiteWithURL) {
-        negativeURL = fraudSiteWithURL.url;
-      } else {
-        // Web検索結果のURLを取得
-        const negativeSearch = applicantEgoSearch.negativeSearchResults.find((r: any) => r.found && r.results && r.results.length > 0);
-        if (negativeSearch && negativeSearch.results && negativeSearch.results.length > 0) {
-          negativeURL = negativeSearch.results[0].url;
+      // 詐欺情報サイトのURL
+      applicantEgoSearch.fraudSiteResults.forEach((fraudSite: any) => {
+        if (fraudSite.found && fraudSite.url) {
+          negativeURLs.push({
+            タイトル: fraudSite.siteName,
+            URL: fraudSite.url,
+            ソース: "詐欺情報サイト",
+          });
         }
-      }
+      });
+
+      // Web検索結果のURL（AI判定でrelevant=trueのもののみ）
+      applicantEgoSearch.negativeSearchResults.forEach((searchResult: any) => {
+        if (searchResult.found && searchResult.results && searchResult.results.length > 0) {
+          searchResult.results.forEach((result: any) => {
+            negativeURLs.push({
+              タイトル: result.title,
+              URL: result.url,
+              ソース: `Web検索: ${searchResult.query}`,
+            });
+          });
+        }
+      });
     }
 
     const 申込者エゴサーチサマリー = {
@@ -610,9 +627,9 @@ export const phase3VerificationStep = createStep({
       詐欺情報サイト: applicantEgoSearch.summary.fraudHits,
       Web検索: applicantEgoSearch.negativeSearchResults.filter((r: any) => r.found).length,
       詳細: applicantEgoSearch.summary.details,
-      URL: negativeURL,
+      ネガティブURL一覧: negativeURLs.length > 0 ? negativeURLs : undefined,
     };
-    
+
     // 企業実在性のサマリー
     const 企業実在性サマリー = {
       申込企業: applicantCompany ? {
