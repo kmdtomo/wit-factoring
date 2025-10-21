@@ -67,20 +67,6 @@ export const phase4ReportGenerationStep = createStep({
     console.log(`[Phase 4] 審査レポート生成開始 - recordId: ${recordId}`);
     console.log(`${"=".repeat(80)}\n`);
 
-    // デバッグ: Phase 1-3データの受信確認
-    console.log(`[Phase 4 - Debug] Phase 1 データ有無: ${phase1Results ? 'あり' : 'なし'}`);
-    console.log(`[Phase 4 - Debug] Phase 2 データ有無: ${phase2Results ? 'あり' : 'なし'}`);
-    console.log(`[Phase 4 - Debug] Phase 3 データ有無: ${phase3Results ? 'あり' : 'なし'}`);
-    if (phase1Results) {
-      console.log(`[Phase 4 - Debug] Phase 1 キー:`, Object.keys(phase1Results));
-    }
-    if (phase2Results) {
-      console.log(`[Phase 4 - Debug] Phase 2 キー:`, Object.keys(phase2Results));
-    }
-    if (phase3Results) {
-      console.log(`[Phase 4 - Debug] Phase 3 キー:`, Object.keys(phase3Results));
-    }
-
     try {
       // ========================================
       // Step 1: Kintoneデータ取得
@@ -290,6 +276,7 @@ function buildInputData(
         詐欺情報サイト: 0,
         Web検索: 0,
         詳細: "Phase 3未実行",
+        ネガティブURL一覧: undefined,
       },
 
       // 企業実在性（企業実在性）
@@ -594,8 +581,13 @@ function formatPhase3Data(phase3: any): string {
   output += `- 詐欺情報サイト: ${ego.詐欺情報サイト || 0}件\n`;
   output += `- Web検索: ${ego.Web検索 || 0}件\n`;
   output += `- 詳細: ${ego.詳細 || 'なし'}\n`;
-  if (ego.URL) {
-    output += `- **URL**: ${ego.URL}\n`;
+
+  // 【重要】ネガティブURL一覧を全て表示（URLのみ）
+  if (ego.ネガティブURL一覧 && ego.ネガティブURL一覧.length > 0) {
+    output += `- **ネガティブURL一覧（全${ego.ネガティブURL一覧.length}件）**:\n`;
+    ego.ネガティブURL一覧.forEach((urlInfo: any, index: number) => {
+      output += `  ${index + 1}. ${urlInfo.URL}\n`;
+    });
   }
   output += '\n';
 
