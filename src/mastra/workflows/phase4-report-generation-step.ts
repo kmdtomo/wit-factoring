@@ -307,21 +307,49 @@ function buildFullPrompt(
   inputData: any
 ): string {
   const currentDate = new Date();
-  const currentDateStr = currentDate.toLocaleDateString('ja-JP', {
+
+  // 西暦フォーマット
+  const seirekiStr = currentDate.toLocaleDateString('ja-JP', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+
+  // 和暦フォーマット
+  const warekiStr = currentDate.toLocaleDateString('ja-JP-u-ca-japanese', {
     year: 'numeric',
     month: 'long',
     day: 'numeric',
     era: 'long'
   });
 
+  // 年・月・日を数値で取得
+  const year = currentDate.getFullYear();
+  const month = currentDate.getMonth() + 1;
+  const day = currentDate.getDate();
+
   return `
 # 現在の日時
 
-**本日の日付**: ${currentDateStr}
+**本日の日付（西暦）**: ${seirekiStr}
+**本日の日付（和暦）**: ${warekiStr}
+**数値表記**: ${year}年${month}月${day}日
+
+**和暦換算表（参考）**:
+- 令和元年 = 2019年
+- 令和2年 = 2020年
+- 令和3年 = 2021年
+- 令和4年 = 2022年
+- 令和5年 = 2023年
+- 令和6年 = 2024年
+- 令和7年 = 2025年
+- 令和8年 = 2026年（未来）
+- 令和9年 = 2027年（未来）
 
 この日付を基準に業歴や設立年月日の妥当性を判断してください。
 - 設立年月日が未来日の場合は「登記情報に重大な疑義」と評価
 - 業歴は「現在日 - 設立日」で計算
+- 例: 本日が2025年10月27日で、設立年が「令和7年11月1日」や「令和8年」の場合は未来日
 
 ---
 

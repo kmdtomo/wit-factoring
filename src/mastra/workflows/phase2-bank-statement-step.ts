@@ -326,11 +326,11 @@ ${gamblingKeywords.map((k, i) => `${i + 1}. ${k}`).join('\n')}
      - true の場合: 「3ヶ月連続入金あり」「2ヶ月入金あり」など
      - false の場合: 「過去3ヶ月入金実績なし」
    - **重要**: 期待値¥0で実績も¥0の月は「入金なし」としてカウントする
-   - **JSON出力時の注意**: transactionHistorySummaryは必ず `"文字列"` の形式で、改行を含まないこと
+   - **JSON出力時の注意**: transactionHistorySummaryは必ず文字列の形式で、改行を含まないこと
 
    **判定例:**
-   - 8月¥100万、9月¥150万、10月¥0 → `{"hasTransactionHistory": true, "transactionHistorySummary": "2ヶ月入金あり"}`
-   - 8月¥0、9月¥0、10月¥0 → `{"hasTransactionHistory": false, "transactionHistorySummary": "過去3ヶ月入金実績なし"}`
+   - 8月¥100万、9月¥150万、10月¥0 → hasTransactionHistory: true, transactionHistorySummary: "2ヶ月入金あり"
+   - 8月¥0、9月¥0、10月¥0 → hasTransactionHistory: false, transactionHistorySummary: "過去3ヶ月入金実績なし"
 
 3. ギャンブルリスク検出
    **検出条件:**
