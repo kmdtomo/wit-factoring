@@ -306,7 +306,25 @@ function buildFullPrompt(
   templateContent: string,
   inputData: any
 ): string {
+  const currentDate = new Date();
+  const currentDateStr = currentDate.toLocaleDateString('ja-JP', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    era: 'long'
+  });
+
   return `
+# 現在の日時
+
+**本日の日付**: ${currentDateStr}
+
+この日付を基準に業歴や設立年月日の妥当性を判断してください。
+- 設立年月日が未来日の場合は「登記情報に重大な疑義」と評価
+- 業歴は「現在日 - 設立日」で計算
+
+---
+
 ${promptContent}
 
 ---
@@ -439,6 +457,12 @@ function formatPhase2Data(phase2: any): string {
 
     mainBank.collateralMatches.forEach((match: any) => {
       output += `##### ${match.company}\n\n`;
+
+      // 初回取引判定
+      if (match.hasTransactionHistory !== undefined) {
+        const historyIcon = match.hasTransactionHistory ? '✅' : '⚠️';
+        output += `**入金実績**: ${historyIcon} ${match.transactionHistorySummary || '不明'}\n\n`;
+      }
 
       // 月次照合結果
       if (match.monthlyResults && match.monthlyResults.length > 0) {
