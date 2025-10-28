@@ -438,6 +438,7 @@ JSON形式で出力してください。`;
                 payerName: z.string().describe("通帳記載の振込元名"),
                 purpose: z.string().optional().describe("推測される用途"),
               })).describe("同じ会社からの入金だが期待値と照合できなかった取引"),
+              firstInteractionRisk: z.boolean().optional().describe("過去3ヶ月すべてが¥0（初回取引の可能性）")
             })),
           })),
           riskDetection: z.object({
@@ -502,7 +503,7 @@ JSON形式で出力してください。`;
         });
 
         const result = await generateObject({
-          model: google("gemini-2.5-flash"),
+          model: google("gemini-2.5-pro"),
           prompt: analysisPrompt,
           schema,
         });
@@ -544,7 +545,14 @@ JSON形式で出力してください。`;
           }
 
           console.log(`\n  🔍 照合結果:`);
-          match.monthlyAnalysis.forEach((month: any) => {
+            match.monthlyAnalysis.forEach((month: any) => {
+            // 初回取引リスクの付与（過去3ヶ月すべて0円の場合）
+            try {
+              const allZero = month.expectedAmount === 0 && month.totalMatched === 0;
+              if (allZero) {
+                month.firstInteractionRisk = true;
+              }
+            } catch {}
             const icon = month.matched ? "✓" : "✗";
             const status = month.matched ? "一致" : "不一致";
 
@@ -709,11 +717,8 @@ JSON形式で出力してください。`;
         phase1Results, // Phase 1の結果を引き継ぎ
         phase2Results: {
           mainBankAnalysis: mainBankAnalysis ? {
-            collateralMatches: mainBankAnalysis.collateralMatches.map((match: any) => ({
-              company: match.company,
-              allTransactions: match.allTransactions || [],
-              expectedValues: match.expectedValues || [],
-              monthlyResults: match.monthlyAnalysis.map((ma: any) => ({
+            collateralMatches: mainBankAnalysis.collateralMatches.map((match: any) => {
+              const monthlyResults = (match.monthlyAnalysis || []).map((ma: any) => ({
                 month: ma.month,
                 expected: ma.expectedAmount,
                 actual: ma.totalMatched,
@@ -723,8 +728,19 @@ JSON形式で出力してください。`;
                 confidence: ma.confidence || 0,
                 matchedTransactions: ma.matchedTransactions || [],
                 unmatchedTransactions: ma.unmatchedTransactions || [],
-              })),
-            })),
+                firstInteractionRisk: (ma.expectedAmount === 0 && ma.totalMatched === 0) || undefined,
+              }));
+
+              const firstInteraction = monthlyResults.length > 0 && monthlyResults.every((m: any) => m.expected === 0 && m.actual === 0);
+
+              return {
+                company: match.company,
+                allTransactions: match.allTransactions || [],
+                expectedValues: match.expectedValues || [],
+                monthlyResults,
+                firstInteraction,
+              };
+            }),
             riskDetection: mainBankAnalysis.riskDetection,
           } : undefined,
           factoringAnalysis: mainBankAnalysis ? mainBankAnalysis.factoringAnalysis : {
