@@ -214,6 +214,9 @@ function buildInputData(
   phase3Results: any,
   kintoneData: any
 ): any {
+  // 申込者所感から評価に必要なシグナルを抽出
+  const applicantSignals = parseApplicantSignalsFromKintone(kintoneData);
+
   return {
     recordId,
 
@@ -295,6 +298,9 @@ function buildInputData(
 
     // Kintoneデータ
     kintone: kintoneData,
+
+    // 所感ベースの構造化シグナル（AIが直接参照するために付与）
+    applicantSignals,
   };
 }
 
@@ -306,7 +312,53 @@ function buildFullPrompt(
   templateContent: string,
   inputData: any
 ): string {
+  const currentDate = new Date();
+
+  // 西暦フォーマット
+  const seirekiStr = currentDate.toLocaleDateString('ja-JP', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+
+  // 和暦フォーマット
+  const warekiStr = currentDate.toLocaleDateString('ja-JP-u-ca-japanese', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    era: 'long'
+  });
+
+  // 年・月・日を数値で取得
+  const year = currentDate.getFullYear();
+  const month = currentDate.getMonth() + 1;
+  const day = currentDate.getDate();
+
   return `
+# 現在の日時
+
+**本日の日付（西暦）**: ${seirekiStr}
+**本日の日付（和暦）**: ${warekiStr}
+**数値表記**: ${year}年${month}月${day}日
+
+**和暦換算表（参考）**:
+- 令和元年 = 2019年
+- 令和2年 = 2020年
+- 令和3年 = 2021年
+- 令和4年 = 2022年
+- 令和5年 = 2023年
+- 令和6年 = 2024年
+- 令和7年 = 2025年
+- 令和8年 = 2026年（未来）
+- 令和9年 = 2027年（未来）
+
+この日付を基準に業歴や設立年月日の妥当性を判断してください。
+- 設立年月日が未来日の場合は「登記情報に重大な疑義」と評価
+- 業歴は「現在日 - 設立日」で計算
+- 例: 本日が2025年10月27日で、設立年が「令和7年11月1日」や「令和8年」の場合は未来日
+
+---
+
 ${promptContent}
 
 ---
@@ -347,6 +399,12 @@ ${formatPhase3Data(inputData.phase3)}
 ### Kintoneデータ
 
 ${formatKintoneData(inputData.kintone)}
+
+---
+
+### 申込者評価の入力指標（所感に基づく構造化）
+
+${formatApplicantSignals(inputData.applicantSignals)}
 
 ---
 
@@ -439,6 +497,12 @@ function formatPhase2Data(phase2: any): string {
 
     mainBank.collateralMatches.forEach((match: any) => {
       output += `##### ${match.company}\n\n`;
+
+      // 初回取引判定
+      if (match.hasTransactionHistory !== undefined) {
+        const historyIcon = match.hasTransactionHistory ? '✅' : '⚠️';
+        output += `**入金実績**: ${historyIcon} ${match.transactionHistorySummary || '不明'}\n\n`;
+      }
 
       // 月次照合結果
       if (match.monthlyResults && match.monthlyResults.length > 0) {
@@ -678,6 +742,14 @@ function formatKintoneData(kintone: any): string {
   if (finance.保険料滞納額 !== undefined) output += `- 保険料滞納額: ¥${finance.保険料滞納額.toLocaleString()}\n`;
   output += '\n';
 
+  // 担当者所感・条件（重要：家族構成/賃貸/地域/希望金額など）
+  output += '#### 担当者所感・条件\n\n';
+  if (kintone.所感_条件_担当者 && typeof kintone.所感_条件_担当者 === 'string' && kintone.所感_条件_担当者.trim().length > 0) {
+    output += `${kintone.所感_条件_担当者}\n\n`;
+  } else {
+    output += '（記載なし）\n\n';
+  }
+
   // 買取情報テーブル
   output += '#### 買取情報テーブル\n\n';
   output += '**【重要】掛目は必ずこのテーブルの「掛目」フィールドの値を使用してください。買取額÷請求額を計算しないでください。**\n\n';
@@ -722,6 +794,89 @@ function formatKintoneData(kintone: any): string {
   }
 
   return output;
+}
+
+/**
+ * 所感/Kintoneから申込者評価シグナルを抽出
+ */
+function parseApplicantSignalsFromKintone(kintone: any): any {
+  const basic = kintone?.基本情報 || {};
+  const finance = kintone?.財務リスク情報 || {};
+  const memo: string = (kintone?.所感_条件_担当者 || '').toString();
+
+  const normalize = (s?: string) => (s || '').toString().trim();
+
+  // 地域（簡易判定）
+  const homeAddr = normalize(basic.自宅所在地);
+  const officeAddr = normalize(basic.会社所在地);
+  const isHokkaidoOkinawa = /北海道|沖縄/.test(homeAddr + ' ' + officeAddr);
+  const region = isHokkaidoOkinawa ? '地方（北海道/沖縄）' : (homeAddr || officeAddr ? '首都圏/その他' : '不明');
+
+  // 年齢
+  const ageNum = Number(basic.年齢 || 0) || undefined;
+
+  // 居住形態（所感から抽出）
+  // 例: 「・自宅（賃貸or所有）…賃貸」「・会社（賃貸or所有）…所有」
+  const homeHousing = /自宅（[^）]*）…(所有|持ち家|賃貸)/.exec(memo)?.[1] || '';
+  const officeHousing = /会社（[^）]*）…(所有|持ち家|賃貸)/.exec(memo)?.[1] || '';
+  const housing = {
+    home: homeHousing || undefined,
+    office: officeHousing || undefined,
+  };
+
+  // 家族構成（所感から抽出）例: 「・同居人数及び関係性…妻・子2人」
+  const familyRaw = /同居人数及び関係性…?([^\n]+)/.exec(memo)?.[1]?.trim();
+  const hasFamily = !!familyRaw && !/単身|一人暮らし/.test(familyRaw);
+  const hasChildren = /子|こども|子供|お子/.test(familyRaw || '');
+  const family = {
+    hasFamily,
+    hasChildren,
+    summary: familyRaw || undefined,
+  };
+
+  // 希望金額（所感から抽出）例: 「・希望金額…￥600,000」
+  const hopeAmountMatch = /希望金額…?[¥￥]?(\d[\d,]*)/.exec(memo);
+  const hopeAmount = hopeAmountMatch ? Number(hopeAmountMatch[1].replace(/,/g, '')) : undefined;
+
+  // 資金使途
+  const purpose = normalize(finance.資金使途);
+
+  // 種別/業歴の補足
+  const kind = normalize(basic.種別);
+  const establishedYear = Number(basic.設立年 || 0) || undefined;
+
+  return {
+    personType: kind || '不明',
+    age: ageNum,
+    region,
+    housing,
+    family,
+    purpose: purpose || undefined,
+    hopeAmount,
+    establishedYear,
+  };
+}
+
+/**
+ * 申込者評価シグナルの表示（プロンプト入力用）
+ */
+function formatApplicantSignals(signals: any): string {
+  if (!signals) return '（シグナルなし）\n';
+  let out = '';
+  out += `- 種別: ${signals.personType || '不明'}\n`;
+  if (signals.age !== undefined) out += `- 年齢: ${signals.age}\n`;
+  if (signals.establishedYear) out += `- 設立年: ${signals.establishedYear}\n`;
+  out += `- 住所（地域）: ${signals.region || '不明'}\n`;
+  if (signals.housing) {
+    if (signals.housing.home) out += `- 自宅: ${signals.housing.home}\n`;
+    if (signals.housing.office) out += `- 事務所: ${signals.housing.office}\n`;
+  }
+  if (signals.family) {
+    out += `- 家族構成: ${signals.family.summary || (signals.family.hasFamily ? '同居あり' : '単身')}\n`;
+  }
+  if (signals.purpose) out += `- 資金使途: ${signals.purpose}\n`;
+  if (signals.hopeAmount !== undefined) out += `- 希望金額: ¥${signals.hopeAmount.toLocaleString()}\n`;
+  return out;
 }
 
 /**

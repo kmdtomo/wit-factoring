@@ -47,6 +47,8 @@ export const phase2BankStatementStep = createStep({
             matchType: z.string(),
             confidence: z.number(),
           })),
+          hasTransactionHistory: z.boolean().describe("過去3ヶ月で¥0以外の入金実績があるか（true=継続取引、false=初回取引）"),
+          transactionHistorySummary: z.string().describe("入金実績の要約（30文字以内、改行なし。例: '3ヶ月連続入金あり' or '過去3ヶ月入金実績なし'）"),
         })),
         riskDetection: z.object({
           gambling: z.array(z.object({
@@ -301,16 +303,34 @@ ${gamblingKeywords.map((k, i) => `${i + 1}. ${k}`).join('\n')}
    **照合の原則:**
    - 各取引は1つの期待値にのみ対応
    - 分割入金を検出: 月内分割、月またぎ分割（前月末±7日、当月初±7日）、前払い/後払い（前後1ヶ月）
+   - **重要**: 期待値が¥0の場合、実績も¥0なら「matched: true, matchType: "単独一致"」として扱う（取引がないことが期待通り）
+   - **必須**: 各担保企業について、必ず過去3ヶ月分全てのmonthlyAnalysisを返すこと（¥0の月も含めて全て出力）
 
    **matchType分類:**
    単独一致、月内分割、月またぎ分割、複数月分割、前払い、後払い、不一致
 
    **必須フィールド:**
-   - actualSource: matched=trueなら「¥金額 ← 振込元名」、分割なら「+」で連結、matched=falseなら「検出なし」
-   - matchedTransactions: matched=trueなら照合できた取引を全て含める（空配列禁止）
+   - actualSource: **【重要】必ず1行の文字列で改行なし。** matched=trueなら「¥金額 ← 振込元名」、分割なら「+」で連結、matched=falseなら「検出なし」、**期待値¥0で一致なら「取引なし（期待通り）」**
+   - matchedTransactions: matched=trueなら照合できた取引を全て含める（**期待値¥0の場合は空配列OK**）
 
    **出力例:**
    {"month": "2025-08", "expectedAmount": 1000000, "totalMatched": 1000000, "matched": true, "matchType": "単独一致", "actualSource": "1,000,000円 ← カ)〇〇工務店", "matchedTransactions": [{"date": "07-04", "amount": 1000000, "payerName": "カ)〇〇工務店"}], "unmatchedTransactions": []}
+
+   **0円の場合の出力例:**
+   {"month": "2025-10", "expectedAmount": 0, "totalMatched": 0, "matched": true, "matchType": "単独一致", "actualSource": "取引なし（期待通り）", "matchedTransactions": [], "unmatchedTransactions": []}
+
+   **初回取引判定:**
+   - 各担保企業について、過去3ヶ月で**¥0以外の入金実績**があるかを判定
+   - hasTransactionHistory: 過去3ヶ月に1回でも¥0以外の入金があれば true、全て¥0なら false
+   - transactionHistorySummary: **【重要】必ず1行の文字列で、改行（\n）・タブ（\t）・特殊文字を含めないこと。30文字以内。**
+     - true の場合: 「3ヶ月連続入金あり」「2ヶ月入金あり」など
+     - false の場合: 「過去3ヶ月入金実績なし」
+   - **重要**: 期待値¥0で実績も¥0の月は「入金なし」としてカウントする
+   - **JSON出力時の注意**: transactionHistorySummaryは必ず文字列の形式で、改行を含まないこと
+
+   **判定例:**
+   - 8月¥100万、9月¥150万、10月¥0 → hasTransactionHistory: true, transactionHistorySummary: "2ヶ月入金あり"
+   - 8月¥0、9月¥0、10月¥0 → hasTransactionHistory: false, transactionHistorySummary: "過去3ヶ月入金実績なし"
 
 3. ギャンブルリスク検出
    **検出条件:**
@@ -367,6 +387,16 @@ ${gamblingKeywords.map((k, i) => `${i + 1}. ${k}`).join('\n')}
 - 同月（±15日以内）に2社以上から入金 → alert type="複数社同時利用"
 - 未完済（契約中の可能性）の業者が2社以上 → alert type="契約中複数社"
 
+---
+
+# 【重要】JSON出力時の注意事項
+
+**すべての文字列フィールドで改行（\\n）・タブ（\\t）・特殊文字を含めないこと。**
+特に以下のフィールドは1行の文字列で記載：
+- actualSource
+- transactionHistorySummary
+- payerName
+- destination
 
 JSON形式で出力してください。`;
         
@@ -408,6 +438,7 @@ JSON形式で出力してください。`;
                 payerName: z.string().describe("通帳記載の振込元名"),
                 purpose: z.string().optional().describe("推測される用途"),
               })).describe("同じ会社からの入金だが期待値と照合できなかった取引"),
+              firstInteractionRisk: z.boolean().optional().describe("過去3ヶ月すべてが¥0（初回取引の可能性）")
             })),
           })),
           riskDetection: z.object({
@@ -472,7 +503,7 @@ JSON形式で出力してください。`;
         });
 
         const result = await generateObject({
-          model: google("gemini-2.5-flash"),
+          model: google("gemini-2.5-pro"),
           prompt: analysisPrompt,
           schema,
         });
@@ -514,7 +545,14 @@ JSON形式で出力してください。`;
           }
 
           console.log(`\n  🔍 照合結果:`);
-          match.monthlyAnalysis.forEach((month: any) => {
+            match.monthlyAnalysis.forEach((month: any) => {
+            // 初回取引リスクの付与（過去3ヶ月すべて0円の場合）
+            try {
+              const allZero = month.expectedAmount === 0 && month.totalMatched === 0;
+              if (allZero) {
+                month.firstInteractionRisk = true;
+              }
+            } catch {}
             const icon = month.matched ? "✓" : "✗";
             const status = month.matched ? "一致" : "不一致";
 
@@ -679,11 +717,8 @@ JSON形式で出力してください。`;
         phase1Results, // Phase 1の結果を引き継ぎ
         phase2Results: {
           mainBankAnalysis: mainBankAnalysis ? {
-            collateralMatches: mainBankAnalysis.collateralMatches.map((match: any) => ({
-              company: match.company,
-              allTransactions: match.allTransactions || [],
-              expectedValues: match.expectedValues || [],
-              monthlyResults: match.monthlyAnalysis.map((ma: any) => ({
+            collateralMatches: mainBankAnalysis.collateralMatches.map((match: any) => {
+              const monthlyResults = (match.monthlyAnalysis || []).map((ma: any) => ({
                 month: ma.month,
                 expected: ma.expectedAmount,
                 actual: ma.totalMatched,
@@ -693,8 +728,19 @@ JSON形式で出力してください。`;
                 confidence: ma.confidence || 0,
                 matchedTransactions: ma.matchedTransactions || [],
                 unmatchedTransactions: ma.unmatchedTransactions || [],
-              })),
-            })),
+                firstInteractionRisk: (ma.expectedAmount === 0 && ma.totalMatched === 0) || undefined,
+              }));
+
+              const firstInteraction = monthlyResults.length > 0 && monthlyResults.every((m: any) => m.expected === 0 && m.actual === 0);
+
+              return {
+                company: match.company,
+                allTransactions: match.allTransactions || [],
+                expectedValues: match.expectedValues || [],
+                monthlyResults,
+                firstInteraction,
+              };
+            }),
             riskDetection: mainBankAnalysis.riskDetection,
           } : undefined,
           factoringAnalysis: mainBankAnalysis ? mainBankAnalysis.factoringAnalysis : {

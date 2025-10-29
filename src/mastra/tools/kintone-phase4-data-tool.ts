@@ -67,6 +67,9 @@ export const kintonePhase4DataTool = createTool({
         保険料滞納額: record.保険料滞納額?.value || "",
       };
 
+      // 所感_条件_担当者フィールド
+      const 所感_条件_担当者 = record.所感_条件_担当者?.value || "";
+
       // 買取情報テーブル
       const 買取情報 = (record.買取情報?.value || []).map((row: any) => ({
         買取先企業名: row.value.会社名_第三債務者_買取?.value || "",
@@ -124,6 +127,7 @@ export const kintonePhase4DataTool = createTool({
         recordId,
         基本情報,
         財務リスク情報,
+        所感_条件_担当者,
         買取情報,
         担保情報,
         謄本情報,

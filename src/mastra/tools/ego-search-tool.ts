@@ -19,6 +19,11 @@ export const egoSearchTool = createTool({
       url: z.string(),
       found: z.boolean(),
       details: z.string().optional(),
+      articles: z.array(z.object({
+        title: z.string(),
+        url: z.string(),
+        htmlContent: z.string().describe("記事本文のHTML"),
+      })).optional().describe("ヒットした場合の個別記事情報"),
     })),
     negativeSearchResults: z.array(z.object({
       query: z.string(),
@@ -27,6 +32,7 @@ export const egoSearchTool = createTool({
         title: z.string(),
         url: z.string(),
         snippet: z.string(),
+        htmlContent: z.string().optional().describe("記事本文のHTML（第2段階で取得）"),
       })).optional(),
     })),
     summary: z.object({
@@ -97,15 +103,16 @@ export const egoSearchTool = createTool({
         // WebFetchを使用してサイトを検索
         const searchUrl = site.searchUrl(name);
         console.log(`Checking fraud site: ${site.name} with URL: ${searchUrl}`);
-        
+
         // 実際にサイトにアクセスしてチェック
-        const found = await checkFraudSite(site, name);
-        
+        const result = await checkFraudSite(site, name);
+
         fraudSiteResults.push({
           siteName: site.name,
           url: site.url,
-          found: found,
-          details: found ? `${name}に関する情報が見つかりました` : undefined,
+          found: result.found,
+          details: result.found ? `${name}に関する情報が見つかりました（記事数: ${result.articles?.length || 0}件）` : undefined,
+          articles: result.articles,
         });
       } catch (error) {
         console.error(`Error checking fraud site ${site.name}:`, error);
@@ -114,6 +121,7 @@ export const egoSearchTool = createTool({
           url: site.url,
           found: false,
           details: "サイトアクセスエラー",
+          articles: undefined,
         });
       }
     }
@@ -132,15 +140,16 @@ export const egoSearchTool = createTool({
       try {
         const results = await performSerperSearch(query);
         const hasResults = results && results.length > 0;
-        
-        // 全ての検索結果を返す（フィルタリングしない）
+
+        // 全ての検索結果を返す（記事本文は第2段階で取得）
         // AI判定はワークフロー側で行う
         const allResults = hasResults ? results.map((result: any) => ({
           title: result.title,
           url: result.link,
           snippet: result.snippet,
+          htmlContent: undefined, // 第2段階で取得
         })) : [];
-        
+
         negativeSearchResults.push({
           query,
           found: hasResults, // 検索結果があるかどうかのみ
@@ -191,11 +200,17 @@ function escapeRegExp(string: string): string {
 }
 
 // 詐欺サイトスクレイピング（補助関数）
-async function checkFraudSite(site: any, name: string): Promise<boolean> {
+async function checkFraudSite(
+  site: any,
+  name: string
+): Promise<{
+  found: boolean;
+  articles?: Array<{ title: string; url: string; htmlContent: string }>;
+}> {
   try {
     const searchUrl = site.searchUrl(name);
     console.log(`Checking fraud site: ${searchUrl}`);
-    
+
     const response = await axios.get(searchUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -205,14 +220,14 @@ async function checkFraudSite(site: any, name: string): Promise<boolean> {
       timeout: 10000,
       validateStatus: (status) => status < 500, // 404などのエラーも許容
     });
-    
+
     if (response.status !== 200) {
       console.log(`Site returned status ${response.status}`);
-      return false;
+      return { found: false };
     }
-    
+
     const html = response.data;
-    
+
     // 検索結果が見つからないパターンをチェック
     const noResultPatterns = [
       'no results found',
@@ -225,46 +240,154 @@ async function checkFraudSite(site: any, name: string): Promise<boolean> {
       'No posts found',
       '検索結果が見つかりませんでした'
     ];
-    
+
     const htmlLower = html.toLowerCase();
-    const hasNoResults = noResultPatterns.some(pattern => 
+    const hasNoResults = noResultPatterns.some(pattern =>
       htmlLower.includes(pattern.toLowerCase())
     );
-    
+
     if (hasNoResults) {
       console.log(`No results found for ${name} on ${site.name}`);
-      return false;
+      return { found: false };
     }
-    
+
     // 名前が実際にページに含まれているかチェック
-    // （タイトルや本文に名前が含まれている場合）
     const nameVariations = [
       name,
       name.replace(/\s/g, ''), // スペースなし
       name.replace(/[　\s]/g, ''), // 全角・半角スペースなし
     ];
-    
+
     let found = false;
     for (const variation of nameVariations) {
-      // 検索クエリ自体は除外（URLやフォームの値として含まれるため）
-      // 本文やタイトルに含まれているかをチェック
       const contentRegex = new RegExp(`(?<!name="|value="|q=|s=|query=|search=|keyword=)${escapeRegExp(variation)}`, 'gi');
       const matches = html.match(contentRegex);
-      
+
       if (matches && matches.length > 0) {
-        // デバッグ用: マッチした部分の前後を確認
-        const contextMatches = html.match(new RegExp(`.{0,50}${escapeRegExp(variation)}.{0,50}`, 'gi'));
-        if (contextMatches) {
-          console.log(`Found ${variation} in context:`, contextMatches[0]);
-        }
         found = true;
         break;
       }
     }
-    
-    return found;
+
+    if (!found) {
+      console.log(`Name "${name}" not found in search results`);
+      return { found: false };
+    }
+
+    // ヒットした場合: 個別記事URLを抽出して本文を取得
+    console.log(`Found potential matches for ${name}, extracting article URLs...`);
+    const articleUrls = extractArticleUrls(html, site.url);
+
+    if (articleUrls.length === 0) {
+      console.log(`No article URLs found in search results`);
+      return { found: false };
+    }
+
+    console.log(`Fetching ${articleUrls.length} article(s)...`);
+    const articles = await Promise.all(
+      articleUrls.slice(0, 5).map(async (articleUrl) => { // 最大5件まで
+        try {
+          const articleResponse = await axios.get(articleUrl.url, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
+            },
+            timeout: 10000,
+            validateStatus: (status) => status < 500,
+          });
+
+          if (articleResponse.status === 200) {
+            console.log(`Successfully fetched article: ${articleUrl.title}`);
+            return {
+              title: articleUrl.title,
+              url: articleUrl.url,
+              htmlContent: articleResponse.data,
+            };
+          } else {
+            console.log(`Failed to fetch article ${articleUrl.url}: status ${articleResponse.status}`);
+            return null;
+          }
+        } catch (error) {
+          console.error(`Error fetching article ${articleUrl.url}:`, error);
+          return null;
+        }
+      })
+    );
+
+    const validArticles = articles.filter((a) => a !== null) as Array<{ title: string; url: string; htmlContent: string }>;
+
+    if (validArticles.length === 0) {
+      console.log(`Failed to fetch any articles`);
+      return { found: false };
+    }
+
+    console.log(`Successfully fetched ${validArticles.length} article(s)`);
+    return {
+      found: true,
+      articles: validArticles,
+    };
   } catch (error) {
     console.error(`Failed to check fraud site ${site.name}:`, error);
-    return false;
+    return { found: false };
   }
+}
+
+// Web検索結果の記事本文を取得（エクスポート）
+export async function fetchArticleContent(url: string): Promise<string | null> {
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
+      },
+      timeout: 10000,
+      validateStatus: (status) => status < 500,
+    });
+
+    if (response.status === 200) {
+      return response.data;
+    } else {
+      console.log(`Failed to fetch article ${url}: status ${response.status}`);
+      return null;
+    }
+  } catch (error) {
+    console.error(`Error fetching article ${url}:`, error);
+    return null;
+  }
+}
+
+// 検索結果ページから個別記事URLを抽出
+function extractArticleUrls(html: string, baseUrl: string): Array<{ title: string; url: string }> {
+  const articles: Array<{ title: string; url: string }> = [];
+
+  // WordPressの標準的な記事リンクパターンを抽出
+  // 例: <a href="https://eradicationofblackmoneyscammers.com/2023/01/article-title/">タイトル</a>
+  const linkRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>([^<]+)<\/a>/gi;
+  let match;
+
+  while ((match = linkRegex.exec(html)) !== null) {
+    const url = match[1];
+    const title = match[2].trim();
+
+    // 記事URLっぽいもののみ（検索やカテゴリページは除外）
+    if (
+      url.includes(baseUrl) &&
+      !url.includes('?s=') &&
+      !url.includes('/category/') &&
+      !url.includes('/tag/') &&
+      !url.includes('/page/') &&
+      !url.includes('#') &&
+      title.length > 0 &&
+      title.length < 200 // タイトルが異常に長いものを除外
+    ) {
+      // 重複を避ける
+      if (!articles.some(a => a.url === url)) {
+        articles.push({ title, url });
+      }
+    }
+  }
+
+  return articles;
 }
