@@ -147,6 +147,9 @@ persons: [
 3. 設立年月日を抽出
 4. 代表者名を抽出
 5. 本店所在地を抽出
+6. 可能なら会社法人等番号（13桁、ハイフン有無は任意）を抽出（key: corporateNumber）
+7. 商号の現称号・旧称号（変更履歴がある場合）を抽出（key: tradeNames={current, former[]}）
+8. 名称候補（誤OCR対策）を配列で抽出（カナのみの候補は除外、漢字比率スコアを付与）
 
 【注意】
 - 見えない/判別不能な場合はnullを返す
@@ -171,6 +174,9 @@ JSON形式で出力してください。`;
             established: z.string().nullable().describe("設立年月日"),
             representative: z.string().nullable().describe("代表者名"),
             location: z.string().nullable().describe("本店所在地"),
+            corporateNumber: z.string().nullable().describe("会社法人等番号"),
+            tradeNames: z.object({ current: z.string().nullable(), former: z.array(z.string()).nullable() }).nullable().describe("商号群（現称号・旧称号）"),
+            nameCandidates: z.array(z.object({ name: z.string(), kanjiRatio: z.number() })).nullable().describe("名称候補（誤OCR対策）"),
           }).nullable().describe("登記情報（ある場合のみ、ない場合はnull）"),
           documentType: z.string().describe("書類の種類（例：運転免許証、登記簿謄本）"),
         }),

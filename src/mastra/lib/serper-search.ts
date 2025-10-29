@@ -19,7 +19,7 @@ export async function performSerperSearch(query: string): Promise<SerperSearchRe
       'https://google.serper.dev/search',
       {
         q: query,
-        num: 10, // 最大10件
+        num: 6, // 最大6件（4クエリ×6件）
         hl: 'ja', // 日本語
         gl: 'jp', // 日本
       },
