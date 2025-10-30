@@ -704,6 +704,12 @@ export const phase3VerificationStep = createStep({
       })) : undefined,
     };
 
+    // DEBUG: Phase 3 → Phase 4 に渡すサマリーの整合性チェック用ログ
+    console.log(`\n[Phase 3] ➡️ Phase 4 へ渡すサマリー（厳格後）`);
+    console.log(`  申込者エゴサーチ: ネガティブ=${申込者エゴサーチサマリー.ネガティブ情報}, 詐欺=${申込者エゴサーチサマリー.詐欺情報サイト}, Web検索(クエリ数)=${申込者エゴサーチサマリー.Web検索}, URL数=${申込者エゴサーチサマリー.ネガティブURL一覧?.length || 0}`);
+    console.log(`  企業実在性: 申込企業の確認方法=${企業実在性サマリー.申込企業?.確認方法 || '未確認'}, 買取(確認済み/総数)=${企業実在性サマリー.買取企業.確認済み}/${企業実在性サマリー.買取企業.総数}, 担保(確認済み/総数)=${企業実在性サマリー.担保企業.確認済み}/${企業実在性サマリー.担保企業.総数}`);
+    console.log(`  代表者リスク: 検索対象=${代表者リスクサマリー.検索対象}, リスク検出=${代表者リスクサマリー.リスク検出}`);
+
     return {
       recordId,
       phase1Results, // Phase 1の結果を引き継ぎ
@@ -1286,7 +1292,8 @@ function updateEgoSearchWithAnalysis(egoSearchResult: any, analysis: any, name: 
     const relevantArticles = fraudSite.articles
       .map((article: any, idx: number) => {
         const articleAnalysis = analysis.fraudSiteArticles?.find((a: any) => a.articleIndex === idx);
-        if (articleAnalysis && articleAnalysis.isRelevant) {
+        const isStrictRelevant = !!articleAnalysis && articleAnalysis.isRelevant === true && articleAnalysis.nameMatch === true && articleAnalysis.isFraudRelated === true;
+        if (isStrictRelevant) {
           totalFraudHits++;
           return {
             ...article,
@@ -1333,7 +1340,12 @@ function updateEgoSearchWithAnalysis(egoSearchResult: any, analysis: any, name: 
     const relevantResults = queryResult.results
       .map((searchResult: any, idx: number) => {
         const resultAnalysis = queryAnalysis.results.find((r: any) => r.resultIndex === idx);
-        if (resultAnalysis && resultAnalysis.isRelevant) {
+        // 厳格判定: 本文があるケースは nameMatch=true かつ isFraudRelated=true を必須
+        const hasContent = !!searchResult.htmlContent || !!(resultAnalysis && resultAnalysis.extractedName);
+        const passesStrict = !!resultAnalysis && resultAnalysis.isRelevant === true && (
+          hasContent ? (resultAnalysis.nameMatch === true && resultAnalysis.isFraudRelated === true) : false
+        );
+        if (passesStrict) {
           return {
             ...searchResult,
             aiReason: resultAnalysis.reason,
