@@ -50,13 +50,34 @@ export const phase4ReportGenerationStep = createStep({
   execute: async ({ inputData, runId }) => {
     const startTime = Date.now();
 
-    // 並列実行の結果を取得（各ステップIDでネームスペース化されている）
-    const phase1Data = inputData["phase1-purchase-collateral"];
-    const phase2Data = inputData["phase2-bank-statement"];
-    const phase3Data = inputData["phase3-verification"];
+    // デバッグ: 入力データの確認
+    console.log(`\n[Phase 4 Debug] inputData keys:`, Object.keys(inputData || {}));
+    console.log(`[Phase 4 Debug] inputData type:`, typeof inputData);
+
+    // inputDataが配列の場合も考慮（並列実行の結果が配列で返される可能性）
+    let phase1Data, phase2Data, phase3Data;
+
+    if (Array.isArray(inputData)) {
+      console.log(`[Phase 4 Debug] inputData is array, length:`, inputData.length);
+      // 配列の場合、各要素がPhaseの結果
+      phase1Data = inputData[0];
+      phase2Data = inputData[1];
+      phase3Data = inputData[2];
+    } else {
+      console.log(`[Phase 4 Debug] inputData is object`);
+      // オブジェクトの場合、各ステップIDでネームスペース化されている
+      phase1Data = inputData["phase1-purchase-collateral"];
+      phase2Data = inputData["phase2-bank-statement"];
+      phase3Data = inputData["phase3-verification"];
+    }
+
+    console.log(`[Phase 4 Debug] phase1Data exists:`, !!phase1Data);
+    console.log(`[Phase 4 Debug] phase2Data exists:`, !!phase2Data);
+    console.log(`[Phase 4 Debug] phase3Data exists:`, !!phase3Data);
 
     // recordIdは並列実行結果から取得（Phase 1から）
     const recordId = phase1Data?.recordId || phase2Data?.recordId || phase3Data?.recordId;
+    console.log(`[Phase 4 Debug] recordId:`, recordId);
 
     // 実際のphaseResultsを抽出
     const phase1Results = phase1Data?.phase1Results || phase1Data;
@@ -64,8 +85,18 @@ export const phase4ReportGenerationStep = createStep({
     const phase3Results = phase3Data?.phase3Results || phase3Data;
 
     console.log(`\n${"=".repeat(80)}`);
-    console.log(`[Phase 4] 審査レポート生成開始 - recordId: ${recordId}`);
+    console.log(`🚀 [Phase 4/4 - Phase1-3完了後] 審査レポート生成開始 - recordId: ${recordId}`);
     console.log(`${"=".repeat(80)}\n`);
+
+    // recordIdがない場合のエラーハンドリング
+    if (!recordId) {
+      const errorMessage = "recordIdがPhase1-3の結果から取得できませんでした";
+      console.error(`[Phase 4 Error] ${errorMessage}`);
+      console.error(`[Phase 4 Error] phase1Data:`, phase1Data);
+      console.error(`[Phase 4 Error] phase2Data:`, phase2Data);
+      console.error(`[Phase 4 Error] phase3Data:`, phase3Data);
+      throw new Error(errorMessage);
+    }
 
     try {
       // ========================================
@@ -171,7 +202,7 @@ export const phase4ReportGenerationStep = createStep({
       console.log(`[Phase 4] 審査レポート生成完了 - 処理時間: ${(totalDuration / 1000).toFixed(2)}秒`);
       console.log(`${"=".repeat(80)}\n`);
 
-      return {
+      const outputData = {
         recordId,
         phase1Results, // Phase 1の結果を引き継ぎ
         phase2Results, // Phase 2の結果を引き継ぎ
@@ -191,6 +222,20 @@ export const phase4ReportGenerationStep = createStep({
           detailedAnalysisHtmlLength: detailedAnalysisHtml.length,
         },
       };
+
+      console.log(`\n[Phase 4 Output] 返却データ構造:`, {
+        recordId: outputData.recordId,
+        hasPhase1Results: !!outputData.phase1Results,
+        hasPhase2Results: !!outputData.phase2Results,
+        hasPhase3Results: !!outputData.phase3Results,
+        riskSummaryHtmlLength: outputData.riskSummaryHtml.length,
+        detailedAnalysisHtmlLength: outputData.detailedAnalysisHtml.length,
+        phase4ResultsKeys: Object.keys(outputData.phase4Results),
+      });
+
+      console.log(`\n✅ [Phase 4] 正常終了 - データ返却中...\n`);
+
+      return outputData;
 
     } catch (error: any) {
       console.error(`\n[Phase 4] エラー発生:`, error.message);

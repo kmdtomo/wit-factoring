@@ -50,11 +50,11 @@ export const phase1PurchaseCollateralStep = createStep({
   
   execute: async ({ inputData }) => {
     const { recordId } = inputData;
-    
+
     console.log(`\n${"=".repeat(80)}`);
-    console.log(`[Phase 1] 買取・担保情報処理開始 - recordId: ${recordId}`);
+    console.log(`🚀 [Phase 1/4 - 並列実行] 買取・担保情報処理開始 - recordId: ${recordId}`);
     console.log(`${"=".repeat(80)}\n`);
-    
+
     try {
       // ========================================
       // ステップ1: OCR処理（ツールを直接実行）
@@ -243,6 +243,8 @@ export const phase1PurchaseCollateralStep = createStep({
       console.log(`  担保発見: ${collateralResult.keyFindings.length}件`);
       console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
 
+      console.log(`\n✅ [Phase 1/4] 正常終了 - データ返却中...\n`);
+
       return {
         recordId,
         phase1Results: {
@@ -268,7 +270,7 @@ export const phase1PurchaseCollateralStep = createStep({
           totalCost,
         },
       };
-      
+
     } catch (error: any) {
       console.error(`\n[Phase 1] エラー発生:`, error.message);
       console.error(error);

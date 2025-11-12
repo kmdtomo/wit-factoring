@@ -113,11 +113,11 @@ export const phase2BankStatementStep = createStep({
   
   execute: async ({ inputData }) => {
     const { recordId, phase1Results } = inputData;
-    
+
     console.log(`\n${"=".repeat(80)}`);
-    console.log(`[Phase 2] 通帳分析開始 - recordId: ${recordId}`);
+    console.log(`🚀 [Phase 2/4 - 並列実行] 通帳分析開始 - recordId: ${recordId}`);
     console.log(`${"=".repeat(80)}\n`);
-    
+
     try {
       const startTime = Date.now();
       
@@ -710,6 +710,8 @@ JSON形式で出力してください。`;
         console.log(`  他社ファクタリング: ${factoringTotal}社検出（契約中の可能性: ${activeFactoring}社）`);
       }
       console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+
+      console.log(`\n✅ [Phase 2/4] 正常終了 - データ返却中...\n`);
 
       // 簡潔でわかりやすい出力構造
       return {
