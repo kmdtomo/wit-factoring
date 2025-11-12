@@ -32,6 +32,7 @@ export const egoSearchTool = createTool({
         title: z.string(),
         url: z.string(),
         snippet: z.string(),
+        date: z.string().optional().describe("記事公開日（取得できる場合のみ）"),
         htmlContent: z.string().optional().describe("記事本文のHTML（第2段階で取得）"),
       })).optional(),
     })),
@@ -136,24 +137,39 @@ export const egoSearchTool = createTool({
       `${name} 被害`,
     ];
 
+    // SNSドメインのブラックリスト（除外対象）
+    const snsDomains = [
+      'instagram.com',
+      'twitter.com',
+      'x.com',
+      'facebook.com',
+      'threads.net',
+    ];
+
     for (const query of negativeQueries) {
       try {
         const results = await performSerperSearch(query);
         const hasResults = results && results.length > 0;
 
-        // 全ての検索結果を返す（記事本文は第2段階で取得）
-        // AI判定はワークフロー側で行う
-        const allResults = hasResults ? results.map((result: any) => ({
-          title: result.title,
-          url: result.link,
-          snippet: result.snippet,
-          htmlContent: undefined, // 第2段階で取得
-        })) : [];
+        // SNSドメインを除外してフィルタリング
+        const filteredResults = hasResults ? results
+          .filter((result: any) => {
+            const url = result.link || '';
+            // SNSドメインを含むURLを除外
+            return !snsDomains.some(domain => url.includes(domain));
+          })
+          .map((result: any) => ({
+            title: result.title,
+            url: result.link,
+            snippet: result.snippet,
+            date: result.date || undefined, // 記事公開日（取得できる場合のみ）
+            htmlContent: undefined, // 第2段階で取得
+          })) : [];
 
         negativeSearchResults.push({
           query,
-          found: hasResults, // 検索結果があるかどうかのみ
-          results: hasResults ? allResults : undefined,
+          found: filteredResults.length > 0, // フィルタ後に結果があるかどうか
+          results: filteredResults.length > 0 ? filteredResults : undefined,
         });
       } catch (error) {
         console.error(`Search error for query "${query}":`, error);
@@ -355,6 +371,38 @@ export async function fetchArticleContent(url: string): Promise<string | null> {
   } catch (error) {
     console.error(`Error fetching article ${url}:`, error);
     return null;
+  }
+}
+
+/**
+ * HTMLから記事公開日を抽出（メタタグまたはURL）
+ */
+export function extractPublicationDate(html: string, url: string): string | undefined {
+  try {
+    // メタタグから抽出
+    const metaPatterns = [
+      /<meta[^>]*property=["']article:published_time["'][^>]*content=["']([^"']+)["']/i,
+      /<meta[^>]*name=["']date["'][^>]*content=["']([^"']+)["']/i,
+      /<meta[^>]*name=["']pubdate["'][^>]*content=["']([^"']+)["']/i,
+      /<time[^>]*datetime=["']([^"']+)["']/i,
+    ];
+
+    for (const pattern of metaPatterns) {
+      const match = html.match(pattern);
+      if (match && match[1]) {
+        return match[1];
+      }
+    }
+
+    // URLから日付を抽出（例: /2023/05/15/article）
+    const urlDateMatch = url.match(/\/(\d{4})\/(\d{1,2})\/(\d{1,2})\//);
+    if (urlDateMatch) {
+      return `${urlDateMatch[1]}-${urlDateMatch[2].padStart(2, '0')}-${urlDateMatch[3].padStart(2, '0')}`;
+    }
+
+    return undefined;
+  } catch {
+    return undefined;
   }
 }
 
