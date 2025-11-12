@@ -79,8 +79,36 @@ export const googleVisionIdentityOcrTool = createTool({
       }
       
       const record = recordResponse.data.records[0];
-      const identityFiles = record[identityFieldName]?.value || [];
-      
+      const allIdentityFiles = record[identityFieldName]?.value || [];
+
+      // ファイル名フィルタリング: （現在）（閉鎖）を除外
+      const shouldIncludeFile = (fileName: string): boolean => {
+        // ファイル名に（現在）または（閉鎖）が含まれる場合は除外
+        if (fileName.includes('（現在）') || fileName.includes('（閉鎖）')) {
+          return false;
+        }
+        return true;
+      };
+
+      const identityFiles = allIdentityFiles.filter((file: any) => shouldIncludeFile(file.name));
+      const excludedCount = allIdentityFiles.length - identityFiles.length;
+
+      console.log(`[本人確認OCR] 処理対象: ${identityFiles.length}件（除外: ${excludedCount}件）`);
+
+      if (excludedCount > 0) {
+        console.log(`[本人確認OCR] 除外されたファイル（現在/閉鎖）:`);
+        allIdentityFiles.filter((file: any) => !shouldIncludeFile(file.name)).forEach((file: any) => {
+          console.log(`  ❌ ${file.name}`);
+        });
+      }
+
+      if (identityFiles.length > 0) {
+        console.log(`[本人確認OCR] 処理対象ファイル一覧:`);
+        identityFiles.forEach((file: any) => {
+          console.log(`  ✅ ${file.name}`);
+        });
+      }
+
       if (identityFiles.length === 0) {
         return {
           success: false,
@@ -94,7 +122,9 @@ export const googleVisionIdentityOcrTool = createTool({
           costAnalysis: {
             googleVisionCost: 0,
           },
-          error: `${identityFieldName} にファイルが添付されていません`,
+          error: excludedCount > 0
+            ? `${identityFieldName} の全ファイルが除外されました（現在/閉鎖）`
+            : `${identityFieldName} にファイルが添付されていません`,
         };
       }
       

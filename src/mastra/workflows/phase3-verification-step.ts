@@ -6,7 +6,7 @@ import { generateObject } from "ai";
 import axios from "axios";
 import { googleVisionIdentityOcrTool } from "../tools/google-vision-identity-ocr-tool";
 import { identityVerificationTool } from "../tools/identity-verification-tool";
-import { egoSearchTool, fetchArticleContent } from "../tools/ego-search-tool";
+import { egoSearchTool, fetchArticleContent, extractPublicationDate } from "../tools/ego-search-tool";
 import { companyVerifyBatchTool } from "../tools/company-verify-batch-tool";
 
 const google = createGoogleGenerativeAI({
@@ -60,6 +60,12 @@ export const phase3VerificationStep = createStep({
           タイトル: z.string(),
           URL: z.string(),
           ソース: z.string().describe("詐欺情報サイト or Web検索(クエリ名)"),
+          AI判定理由: z.string().optional().describe("AIがこの記事をヒットと判定した理由"),
+          AI分析: z.object({
+            抽出された名前: z.string(),
+            名前一致: z.string(),
+            犯罪関連: z.string(),
+          }).optional().describe("AIが記事本文から抽出した情報"),
         })).optional().describe("ネガティブ情報が見つかった全てのURL"),
       }),
       企業実在性: z.object({
@@ -262,10 +268,22 @@ export const phase3VerificationStep = createStep({
       }
     }
 
-    // 申込者名を取得（本人確認結果 or Kintone）
-    const applicantName = identityResult
-      ? identityResult.processingDetails.expectedName
-      : await fetchApplicantNameFromKintone(recordId);
+    // 申込者名と年齢を取得（本人確認結果 or Kintone）
+    let applicantName: string;
+    let applicantAge: number | undefined;
+
+    if (identityResult) {
+      applicantName = identityResult.processingDetails.expectedName;
+      // 生年月日から年齢を計算
+      const birthDate = identityResult.processingDetails.expectedBirthDate;
+      if (birthDate) {
+        applicantAge = calculateAge(birthDate);
+      }
+    } else {
+      const applicantInfo = await fetchApplicantNameAndAgeFromKintone(recordId);
+      applicantName = applicantInfo.name;
+      applicantAge = applicantInfo.age;
+    }
 
     // AI判定は後でまとめて実行
     
@@ -421,6 +439,7 @@ export const phase3VerificationStep = createStep({
       {
         personType: "申込者",
         name: applicantName,
+        age: applicantAge, // 年齢情報を追加
         company: undefined,
         companyType: undefined,
         egoSearchResult: applicantEgoSearch,
@@ -428,6 +447,7 @@ export const phase3VerificationStep = createStep({
       ...representativeEgoSearches.map(rep => ({
         personType: "代表者",
         name: rep.name,
+        age: undefined, // 代表者の年齢は不明（謄本からは取得できない）
         company: rep.company,
         companyType: rep.type,
         egoSearchResult: rep.egoSearchResult,
@@ -607,7 +627,19 @@ export const phase3VerificationStep = createStep({
 
     // 申込者エゴサーチのサマリー
     // ネガティブ情報が見つかった場合、全てのURLを収集
-    const negativeURLs: Array<{ タイトル: string; URL: string; ソース: string }> = [];
+    const negativeURLs: Array<{
+      タイトル: string;
+      URL: string;
+      ソース: string;
+      AI判定理由?: string;
+      AI分析?: {
+        抽出された名前: string;
+        名前一致: string;
+        犯罪関連: string;
+        記事種別: string;
+        人物の文脈: string;
+      };
+    }> = [];
 
     if (applicantEgoSearch.summary.hasNegativeInfo) {
       // 詐欺情報サイトのURL
@@ -629,6 +661,14 @@ export const phase3VerificationStep = createStep({
               タイトル: result.title,
               URL: result.url,
               ソース: `Web検索: ${searchResult.query}`,
+              AI判定理由: result.aiReason || "判定理由なし",
+              AI分析: result.aiAnalysis ? {
+                抽出された名前: result.aiAnalysis.extractedName,
+                名前一致: result.aiAnalysis.nameMatch ? "✅ 一致" : "❌ 不一致",
+                犯罪関連: result.aiAnalysis.isFraudRelated ? "✅ あり" : "❌ なし",
+                記事種別: result.aiAnalysis.articleType || "不明",
+                人物の文脈: result.aiAnalysis.personContext || "不明",
+              } : undefined,
             });
           });
         }
@@ -738,6 +778,7 @@ async function analyzeStage1Snippets(
   allEgoSearchData: Array<{
     personType: string;
     name: string;
+    age?: number;
     company?: string;
     companyType?: string;
     egoSearchResult: any;
@@ -792,9 +833,14 @@ async function analyzeStage1Snippets(
         return null;
       }
 
-      const personInfo = person.company
+      // 年齢情報を含める
+      let personInfo = person.company
         ? `対象者${personIdx}: ${person.name}（${person.personType} - ${person.company}）`
         : `対象者${personIdx}: ${person.name}（${person.personType}）`;
+
+      if (person.age !== undefined) {
+        personInfo += ` - 年齢: ${person.age}歳`;
+      }
 
       return `${personInfo}\n${queriesInfo}`;
     }).filter((p: any) => p !== null).join('\n\n');
@@ -831,12 +877,18 @@ ${personsInfo}
 
 【明らかに別人の除外（第1段階）】
 - スニペット/タイトルに明示的な属性が記載され、文脈上その属性が対象者と明らかに食い違うと推定できる場合は needsFullCheck=false（本文取得に進めない）。
+- **年齢情報について（重要）:**
+  - スニペットには記事の年情報がないため、年齢だけでの判定は困難
+  - スニペットに年齢があっても、±10歳以内なら needsFullCheck=true（本文で精密確認）
+  - ±10歳以上差がある場合のみ needsFullCheck=false（明らかに別人）
+  - 例: 対象者30歳、スニペット「50歳」→ 除外、スニペット「35歳」→ 本文確認
 - 属性が読み取れない/曖昧な場合はこの基準は適用しない（無理に除外しない）。
 
 【判定基準】
 - 犯罪・違法関連で、上記の一致（優先/補助いずれか）が疑われる → needsFullCheck=true（本文で精密確認）。
 - 犯罪関連語が含まれるがスニペットだけでは曖昧でも、関連の可能性があれば → needsFullCheck=true（本文で精密確認）。
-- 犯罪関連性がない、または関連が弱い/一般記事 → needsFullCheck=false。`,
+- 犯罪関連性がない、または関連が弱い/一般記事 → needsFullCheck=false。
+- **年齢が±10歳以上差がある場合のみ → needsFullCheck=false（明らかに別人として除外）。**`,
       schema: z.object({
         egoSearchAnalysis: z.object({
           persons: z.array(z.object({
@@ -892,6 +944,7 @@ async function fetchRelevantArticleContents(
   allEgoSearchData: Array<{
     personType: string;
     name: string;
+    age?: number;
     company?: string;
     companyType?: string;
     egoSearchResult: any;
@@ -951,6 +1004,11 @@ async function fetchRelevantArticleContents(
             console.log(`  記事取得中 (${++fetchedArticles}/${totalArticlesToFetch}): ${result.title}`);
             const htmlContent = await fetchArticleContent(result.url);
             result.htmlContent = htmlContent;
+
+            // HTMLから公開日を抽出（dateフィールドがない場合）
+            if (!result.date && htmlContent) {
+              result.date = extractPublicationDate(htmlContent, result.url);
+            }
           }
         })
       );
@@ -968,6 +1026,7 @@ async function analyzeStage2FullContent(
   allEgoSearchData: Array<{
     personType: string;
     name: string;
+    age?: number;
     company?: string;
     companyType?: string;
     egoSearchResult: any;
@@ -1057,6 +1116,11 @@ async function analyzeStage2FullContent(
             .map((result: any, resultIdx: number) => {
               let info = `    結果${resultIdx}: ${result.title}\n       スニペット: ${result.snippet}`;
 
+              // 公開日を含める
+              if (result.date) {
+                info += `\n       公開日: ${result.date}`;
+              }
+
               // 記事本文がある場合は含める
               if (result.htmlContent) {
                 const textContent = result.htmlContent
@@ -1083,9 +1147,14 @@ async function analyzeStage2FullContent(
         return null;
       }
 
-      const personInfo = person.company
+      // 年齢情報を含める
+      let personInfo = person.company
         ? `対象者${personIdx}: ${person.name}（${person.personType} - ${person.company}）`
         : `対象者${personIdx}: ${person.name}（${person.personType}）`;
+
+      if (person.age !== undefined) {
+        personInfo += ` - 年齢: ${person.age}歳`;
+      }
 
       let info = personInfo;
       if (fraudSiteInfo) {
@@ -1142,6 +1211,56 @@ ${personsInfo || '(エゴサーチ結果なし)'}
 - 「田中一郎」 と 「田中一朗」 → **別人（異字）** → nameMatch=false
 - 「サトウタロウ」 と 「さとうたろう」 → 同一人物（カナ表記ゆれ） → nameMatch=true
 
+**【重要】年齢判定ルール（記事内の年情報を活用した逆算）:**
+
+現在の日付: ${new Date().toISOString().split('T')[0]}（現在年: ${new Date().getFullYear()}年）
+
+判定手順:
+1. **記事本文から年情報を抽出:**
+   - 年の表記: 「2023年」「令和5年」「2023/5/15」など
+   - 多くの犯罪記事には「2023年5月に逮捕」のような年情報が含まれる
+   - 公開日メタデータ（取得できる場合）も参考にする
+
+2. **記事本文から年齢情報を抽出:**
+   - 「35歳」「30代」など
+   - 「○代」の場合は中央値として扱う（30代→35歳、40代→45歳）
+
+3. **年齢判定の実行:**
+
+   **【パターンA】記事内の年 + 年齢情報あり（最も一般的）**
+   - 記事内の年と年齢から、現在の推定年齢を計算
+   - 計算式: 記事の年齢 + (現在年 - 記事内の年) = 推定現在年齢
+   - 例: 「2020年、当時35歳」→ 2025年現在なら40歳と推定
+   - 推定年齢と対象者年齢が±5歳以内 → 一致
+   - 推定年齢と対象者年齢が5歳以上差 → 不一致（別人として除外）
+
+   **【パターンB】記事内の年なし + 年齢情報あり**
+   - 記事の年齢を現在の年齢として扱う（保守的）
+   - 対象者年齢が±5歳以内 → 一致
+   - 対象者年齢が5歳以上差 → 不一致（別人として除外）
+
+   **【パターンC】記事内の年あり + 年齢情報なし**
+   - 年齢判定はスキップ（年だけでは判定不可）
+   - 名前の一致のみで判定 → **ヒット扱い（保守的）**
+
+   **【パターンD】記事内の年なし + 年齢情報なし**
+   - 年齢判定はスキップ
+   - 名前の一致のみで判定 → **ヒット扱い（保守的）**
+
+4. **対象者の年齢が不明の場合：**
+   - 年齢判定は全てスキップ（名前の一致のみで判定）
+   - → **ヒット扱い（保守的）**
+
+5. **重要な注意事項:**
+   - 記事本文に「2023年5月」のような年情報があれば、それを優先的に使用
+   - 公開日メタデータは補助的に使用（取得できない場合が多い）
+   - **年齢不一致の場合、名前が完全一致していてもisRelevant=falseとする**
+
+**【重要】SNSサイトの除外:**
+- 以下のSNSドメインからの情報は全て除外（信頼性が低いため）:
+  - instagram.com, twitter.com, x.com, facebook.com, threads.net
+- これらのURLが含まれる検索結果は既にフィルタリング済みですが、念のため確認してください
+
 ＜詐欺情報サイトの記事＞（最重要・厳格判定）
 1. 記事本文から人物名を抽出してください
 2. 抽出した名前と対象者名を上記ルールで比較
@@ -1156,9 +1275,39 @@ ${personsInfo || '(エゴサーチ結果なし)'}
 - 記事本文がある場合：
   1. 記事本文から人物名を抽出
   2. 対象者名と上記ルールで完全一致するか確認
-  3. 詐欺・犯罪関連の内容か判定
-  4. **完全一致（許容される表記ゆれのみ）+ 詐欺・犯罪関連 → isRelevant=true**
-  5. **異字による類似（哉≠也など）→ isRelevant=false**
+  3. **犯罪関連の内容か厳格判定**（以下の基準を満たす必要あり）:
+
+     **✅ ヒット対象（犯罪容疑者・被告人としての記事のみ）:**
+     - 逮捕された（逮捕、送検、連行）
+     - 容疑者として扱われている（容疑、被疑者）
+     - 起訴された（起訴、公判、裁判）
+     - 有罪判決を受けた（有罪、実刑、懲役）
+     - 詐欺・横領・背任などの犯罪行為を行った主体として記載
+     - 特殊詐欺グループの一員として特定
+     - 指名手配されている
+
+     **❌ 除外対象（以下の場合は isRelevant=false）:**
+     - 専門家・コメンテーターとして登場
+     - 警察官・検察官・弁護士として登場
+     - 被害者として登場
+     - 容疑者・被告人として扱われていない一般的な言及
+     - 名前の表記が完全一致しない（異字: 哉≠也、祐≠裕など）
+     - 年齢が±5年以上ずれている（記事内の年月から逆算して確認）
+
+  4. **判定フロー:**
+     - まず記事種別を特定（犯罪記事かどうか）
+     - 次に人物の登場文脈を確認（容疑者・被告人として扱われているか）
+     - **容疑者・被告人として明確に記載されている場合のみ** → isRelevant=true
+     - それ以外は全て → isRelevant=false
+
+  5. **AI判定理由の記載:**
+     - aiReason: なぜヒット/非ヒットと判定したか明確に記載
+     - aiAnalysis.extractedName: 記事から抽出した名前
+     - aiAnalysis.nameMatch: 名前が完全一致したか（true/false）
+     - aiAnalysis.isFraudRelated: 犯罪記事か（true/false）
+     - aiAnalysis.articleType: 記事種別
+     - aiAnalysis.personContext: 人物の文脈
+
 - 記事本文がない場合（スニペットのみ）：
   - 同姓同名の別人（地域・職業が異なる）→ false
   - 専門家・警察官として言及 → false
@@ -1202,6 +1351,8 @@ ${companiesInfo}
                 extractedName: z.string().optional().describe("記事本文から抽出した人物名（本文がある場合）"),
                 nameMatch: z.boolean().optional().describe("対象者名と完全一致するか（本文がある場合）"),
                 isFraudRelated: z.boolean().optional().describe("詐欺・犯罪に関する内容か（本文がある場合）"),
+                articleType: z.string().optional().describe("記事種別（犯罪記事/議事録/ニュース/イベント告知など）"),
+                personContext: z.string().optional().describe("人物の文脈（容疑者/専門家/被害者/言及のみなど）"),
               })),
             })),
           })),
@@ -1353,6 +1504,8 @@ function updateEgoSearchWithAnalysis(egoSearchResult: any, analysis: any, name: 
               extractedName: resultAnalysis.extractedName,
               nameMatch: resultAnalysis.nameMatch,
               isFraudRelated: resultAnalysis.isFraudRelated,
+              articleType: resultAnalysis.articleType,
+              personContext: resultAnalysis.personContext,
             } : undefined,
           };
         }
@@ -1459,16 +1612,24 @@ function printEgoSearchResult(name: string, company: string | undefined, result:
 }
 
 /**
- * Kintoneから申込者名を取得
+ * Kintoneから申込者名を取得（後方互換性のため残す）
  */
 async function fetchApplicantNameFromKintone(recordId: string): Promise<string> {
+  const info = await fetchApplicantNameAndAgeFromKintone(recordId);
+  return info.name;
+}
+
+/**
+ * Kintoneから申込者名と年齢を取得
+ */
+async function fetchApplicantNameAndAgeFromKintone(recordId: string): Promise<{ name: string; age: number | undefined }> {
   const domain = process.env.KINTONE_DOMAIN;
   const apiToken = process.env.KINTONE_API_TOKEN;
   const appId = process.env.KINTONE_APP_ID || "37";
 
   if (!domain || !apiToken) {
     console.error("Kintone環境変数が設定されていません");
-    return "";
+    return { name: "", age: undefined };
   }
 
   try {
@@ -1479,17 +1640,46 @@ async function fetchApplicantNameFromKintone(recordId: string): Promise<string> 
 
     if (response.data.records.length === 0) {
       console.error(`レコードID: ${recordId} が見つかりません`);
-      return "";
+      return { name: "", age: undefined };
     }
 
     const record = response.data.records[0];
     // 申込者氏名を取得
-    const applicantName = record.顧客情報＿氏名?.value || "";
+    const name = record.顧客情報＿氏名?.value || "";
 
-    return applicantName;
+    // 年齢を取得（直接入力されている場合）
+    let age: number | undefined = undefined;
+    if (record.年齢?.value) {
+      age = Number(record.年齢.value);
+    } else if (record.生年月日?.value) {
+      // 生年月日から年齢を計算
+      age = calculateAge(record.生年月日.value);
+    }
+
+    return { name, age };
   } catch (error) {
     console.error("Kintone申込者情報取得エラー:", error);
-    return "";
+    return { name: "", age: undefined };
+  }
+}
+
+/**
+ * 生年月日から年齢を計算
+ */
+function calculateAge(birthDateStr: string): number | undefined {
+  try {
+    const birthDate = new Date(birthDateStr);
+    const today = new Date();
+    let age = today.getFullYear() - birthDate.getFullYear();
+    const monthDiff = today.getMonth() - birthDate.getMonth();
+
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+      age--;
+    }
+
+    return age;
+  } catch {
+    return undefined;
   }
 }
 

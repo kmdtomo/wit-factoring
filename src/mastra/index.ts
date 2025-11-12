@@ -1,31 +1,26 @@
-import { Mastra } from '@mastra/core';
-import { kintoneFetchTool } from './tools/kintone-fetch-tool';
-// Google Vision APIツールはREST API経由で呼び出すため@grpc/grpc-js不要
-import { googleVisionPurchaseCollateralOcrTool } from './tools/google-vision-purchase-collateral-ocr-tool';
-import { purchaseVerificationToolMinimal } from './tools/purchase-verification-tool-minimal';
-import { collateralVerificationTool } from './tools/collateral-verification-tool';
-import { googleVisionBankStatementOcrToolImproved } from './tools/google-vision-bank-statement-ocr-tool-improved';
-import { googleVisionIdentityOcrTool } from './tools/google-vision-identity-ocr-tool';
-import { identityVerificationTool } from './tools/identity-verification-tool';
-import { egoSearchTool } from './tools/ego-search-tool';
-import { companyVerifyBatchTool } from './tools/company-verify-batch-tool';
-import { kintonePhase4DataTool } from './tools/kintone-phase4-data-tool';
+import { Mastra } from '@mastra/core/mastra';
 import { integratedWorkflow } from './workflows/integrated-workflow';
 
+import { createWorkflow } from '@mastra/core/workflows';
+import { z } from 'zod';
+import { phase3VerificationStep } from './workflows/phase3-verification-step';
+
+const phase3VerificationWorkflow = createWorkflow({
+  id: 'phase3-verification-workflow',
+  description: 'Phase 3（本人確認・企業実在性）のみを単独実行します。',
+  inputSchema: z.object({
+    recordId: z.string(),
+    phase1Results: z.any().optional(),
+    phase2Results: z.any().optional(),
+  }),
+  outputSchema: z.any(),
+})
+  .then(phase3VerificationStep)
+  .commit();
+
 export const mastra = new Mastra({
-  tools: {
-    kintoneFetchTool,
-    googleVisionPurchaseCollateralOcrTool,
-    purchaseVerificationToolMinimal,
-    collateralVerificationTool,
-    googleVisionBankStatementOcrToolImproved,
-    googleVisionIdentityOcrTool,
-    identityVerificationTool,
-    egoSearchTool,
-    companyVerifyBatchTool,
-    kintonePhase4DataTool,
-  },
   workflows: {
     integratedWorkflow,
+    phase3VerificationWorkflow,
   },
 });

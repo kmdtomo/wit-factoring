@@ -108,19 +108,46 @@ export const googleVisionPurchaseCollateralOcrTool = createTool({
       
       const record = recordResponse.data.records[0];
       
-      // 2. 買取請求書と担保謄本のファイルを取得（全ファイル処理）
-      const purchaseFiles = record[purchaseFieldName]?.value || [];
-      const collateralFiles = record[collateralFieldName]?.value || [];
-      
+      // 2. 買取請求書と担保謄本のファイルを取得
+      const allPurchaseFiles = record[purchaseFieldName]?.value || [];
+      const allCollateralFiles = record[collateralFieldName]?.value || [];
+
+      // ファイル名フィルタリング: （現在）（閉鎖）を除外
+      const shouldIncludeFile = (fileName: string): boolean => {
+        // ファイル名に（現在）または（閉鎖）が含まれる場合は除外
+        // 例: 会社名（現在）2025102801215337.PDF → 除外
+        if (fileName.includes('（現在）') || fileName.includes('（閉鎖）')) {
+          return false;
+        }
+        // それ以外は全て含める（（全部事項）や、どれも含まれていないファイル）
+        return true;
+      };
+
+      const purchaseFiles = allPurchaseFiles.filter((file: any) => shouldIncludeFile(file.name));
+      const collateralFiles = allCollateralFiles.filter((file: any) => shouldIncludeFile(file.name));
+
+      const excludedPurchaseCount = allPurchaseFiles.length - purchaseFiles.length;
+      const excludedCollateralCount = allCollateralFiles.length - collateralFiles.length;
+
       console.log(`[買取・担保OCR] 処理対象:`);
-      console.log(`  - 買取情報フィールド: ${purchaseFiles.length}件`);
-      console.log(`  - 担保情報フィールド: ${collateralFiles.length}件`);
+      console.log(`  - 買取情報フィールド: ${purchaseFiles.length}件（除外: ${excludedPurchaseCount}件）`);
+      console.log(`  - 担保情報フィールド: ${collateralFiles.length}件（除外: ${excludedCollateralCount}件）`);
       console.log(`  - 処理対象合計: ${purchaseFiles.length + collateralFiles.length}件`);
-      
+
+      if (excludedPurchaseCount > 0 || excludedCollateralCount > 0) {
+        console.log(`\n[買取・担保OCR] 除外されたファイル（現在/閉鎖）:`);
+        allPurchaseFiles.filter((file: any) => !shouldIncludeFile(file.name)).forEach((file: any) => {
+          console.log(`  ❌ ${file.name}`);
+        });
+        allCollateralFiles.filter((file: any) => !shouldIncludeFile(file.name)).forEach((file: any) => {
+          console.log(`  ❌ ${file.name}`);
+        });
+      }
+
       if (purchaseFiles.length > 0) {
-        console.log(`[買取・担保OCR] 買取情報ファイル一覧:`);
+        console.log(`\n[買取・担保OCR] 買取情報ファイル一覧:`);
         purchaseFiles.forEach((file: any) => {
-          console.log(`  - ${file.name}`);
+          console.log(`  ✅ ${file.name}`);
         });
       }
       
