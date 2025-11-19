@@ -24,6 +24,11 @@ export const phase4ReportGenerationStep = createStep({
   description: "Phase 1-3の結果とKintoneデータを統合し、AIによる審査レポートを生成",
 
   inputSchema: z.object({
+    recordId: z.string().optional(),
+    phase1Results: z.any().optional().describe("Phase 1の結果（買取・担保情報）"),
+    phase2Results: z.any().optional().describe("Phase 2の結果（通帳分析）"),
+    phase3Results: z.any().optional().describe("Phase 3の結果（本人確認・企業実在性）"),
+    // 並列実行の場合のキー（後方互換性）
     "phase1-purchase-collateral": z.any().optional().describe("Phase 1の結果（買取・担保情報）"),
     "phase2-bank-statement": z.any().optional().describe("Phase 2の結果（通帳分析）"),
     "phase3-verification": z.any().optional().describe("Phase 3の結果（本人確認・企業実在性）"),
@@ -54,29 +59,35 @@ export const phase4ReportGenerationStep = createStep({
     console.log(`\n[Phase 4 Debug] inputData keys:`, Object.keys(inputData || {}));
     console.log(`[Phase 4 Debug] inputData type:`, typeof inputData);
 
-    // inputDataが配列の場合も考慮（並列実行の結果が配列で返される可能性）
+    // 順次実行の場合、inputDataに直接Phase 1-3の結果が含まれている
     let phase1Data, phase2Data, phase3Data;
 
     if (Array.isArray(inputData)) {
-      console.log(`[Phase 4 Debug] inputData is array, length:`, inputData.length);
-      // 配列の場合、各要素がPhaseの結果
+      console.log(`[Phase 4 Debug] inputData is array (並列実行), length:`, inputData.length);
+      // 配列の場合、各要素がPhaseの結果（並列実行）
       phase1Data = inputData[0];
       phase2Data = inputData[1];
       phase3Data = inputData[2];
-    } else {
-      console.log(`[Phase 4 Debug] inputData is object`);
-      // オブジェクトの場合、各ステップIDでネームスペース化されている
+    } else if (inputData["phase1-purchase-collateral"]) {
+      console.log(`[Phase 4 Debug] inputData has phase keys (並列実行 - オブジェクト)`);
+      // オブジェクトの場合、各ステップIDでネームスペース化されている（並列実行）
       phase1Data = inputData["phase1-purchase-collateral"];
       phase2Data = inputData["phase2-bank-statement"];
       phase3Data = inputData["phase3-verification"];
+    } else {
+      console.log(`[Phase 4 Debug] inputData is sequential (順次実行)`);
+      // 順次実行の場合、Phase 3の出力がそのまま渡される
+      phase1Data = inputData.phase1Results;
+      phase2Data = inputData.phase2Results;
+      phase3Data = inputData.phase3Results;
     }
 
     console.log(`[Phase 4 Debug] phase1Data exists:`, !!phase1Data);
     console.log(`[Phase 4 Debug] phase2Data exists:`, !!phase2Data);
     console.log(`[Phase 4 Debug] phase3Data exists:`, !!phase3Data);
 
-    // recordIdは並列実行結果から取得（Phase 1から）
-    const recordId = phase1Data?.recordId || phase2Data?.recordId || phase3Data?.recordId;
+    // recordIdは入力データから取得
+    const recordId = inputData.recordId || phase1Data?.recordId || phase2Data?.recordId || phase3Data?.recordId;
     console.log(`[Phase 4 Debug] recordId:`, recordId);
 
     // 実際のphaseResultsを抽出
@@ -85,7 +96,7 @@ export const phase4ReportGenerationStep = createStep({
     const phase3Results = phase3Data?.phase3Results || phase3Data;
 
     console.log(`\n${"=".repeat(80)}`);
-    console.log(`🚀 [Phase 4/4 - Phase1-3完了後] 審査レポート生成開始 - recordId: ${recordId}`);
+    console.log(`🚀 [Phase 4/4] 審査レポート生成開始 - recordId: ${recordId}`);
     console.log(`${"=".repeat(80)}\n`);
 
     // recordIdがない場合のエラーハンドリング
@@ -475,14 +486,27 @@ function formatPhase1Data(phase1: any): string {
       output += `- 文書タイプ: ${doc.documentType}\n`;
 
       const facts = doc.extractedFacts || {};
-      if (facts.請求元) output += `- 請求元: ${facts.請求元}\n`;
-      if (facts.請求先) output += `- 請求先: ${facts.請求先}\n`;
-      if (facts.請求額) output += `- 請求額: ${facts.請求額}\n`;
-      if (facts.請求日) output += `- 請求日: ${facts.請求日}\n`;
-      if (facts.支払期日) output += `- 支払期日: ${facts.支払期日}\n`;
-      if (facts.業務内容) output += `- 業務内容: ${facts.業務内容}\n`;
-      if (facts.工期) output += `- 工期: ${facts.工期}\n`;
-      if (facts.振込先) output += `- 振込先: ${facts.振込先}\n`;
+
+      // 新しいネスト構造（請求書情報.請求元.名称）と古い構造（請求元）の両方に対応
+      const 請求元 = facts.請求書情報?.請求元?.名称 || facts.請求元;
+      const 請求先 = facts.請求書情報?.請求先?.名称 || facts.請求先;
+      const 請求額 = facts.請求書情報?.合計請求金額 || facts.請求額;
+      const 請求日 = facts.請求書情報?.発行日 || facts.請求日;
+      const 支払期日 = facts.支払期日;
+      const 業務内容 = facts.業務内容;
+      const 工期 = facts.発注書情報?.工期 || facts.工期;
+      const 振込先 = facts.請求書情報?.振込先 ?
+        `${facts.請求書情報.振込先.銀行名} ${facts.請求書情報.振込先.支店名} ${facts.請求書情報.振込先.口座種別} ${facts.請求書情報.振込先.口座番号}` :
+        facts.振込先;
+
+      if (請求元) output += `- 請求元: ${請求元}\n`;
+      if (請求先) output += `- 請求先: ${請求先}\n`;
+      if (請求額) output += `- 請求額: ¥${typeof 請求額 === 'number' ? 請求額.toLocaleString() : 請求額}\n`;
+      if (請求日) output += `- 請求日: ${請求日}\n`;
+      if (支払期日) output += `- 支払期日: ${支払期日}\n`;
+      if (業務内容) output += `- 業務内容: ${業務内容}\n`;
+      if (工期) output += `- 工期: ${工期}\n`;
+      if (振込先) output += `- 振込先: ${振込先}\n`;
 
       output += '\n';
     });
@@ -498,11 +522,21 @@ function formatPhase1Data(phase1: any): string {
       output += `- 文書タイプ: ${doc.documentType}\n`;
 
       const facts = doc.extractedFacts || {};
-      if (facts.会社名) output += `- 会社名: ${facts.会社名}\n`;
-      if (facts.資本金) output += `- 資本金: ${facts.資本金}\n`;
-      if (facts.設立年月日) output += `- 設立年月日: ${facts.設立年月日}\n`;
-      if (facts.代表取締役) output += `- 代表取締役: ${facts.代表取締役}\n`;
-      if (facts.本店所在地) output += `- 本店所在地: ${facts.本店所在地}\n`;
+
+      // 登記情報の新しい構造に対応
+      const 会社名 = facts.商号?.現商号 || facts.会社名;
+      const 資本金 = facts.資本金の額 || facts.資本金;
+      const 設立年月日 = facts.会社成立の年月日 || facts.設立年月日 || facts.設立;
+      const 代表取締役 = facts.代表者名 || facts.代表取締役;
+      const 本店所在地 = facts.本店 || facts.本店所在地;
+      const 会社法人等番号 = facts.会社法人等番号;
+
+      if (会社名) output += `- 会社名: ${会社名}\n`;
+      if (会社法人等番号) output += `- 会社法人等番号: ${会社法人等番号}\n`;
+      if (資本金) output += `- 資本金: ${資本金}\n`;
+      if (設立年月日) output += `- 設立年月日: ${設立年月日}\n`;
+      if (代表取締役) output += `- 代表取締役: ${代表取締役}\n`;
+      if (本店所在地) output += `- 本店所在地: ${本店所在地}\n`;
 
       output += '\n';
     });

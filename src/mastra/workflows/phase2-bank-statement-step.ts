@@ -115,7 +115,7 @@ export const phase2BankStatementStep = createStep({
     const { recordId, phase1Results } = inputData;
 
     console.log(`\n${"=".repeat(80)}`);
-    console.log(`🚀 [Phase 2/4 - 並列実行] 通帳分析開始 - recordId: ${recordId}`);
+    console.log(`🚀 [Phase 2/4] 通帳分析開始 - recordId: ${recordId}`);
     console.log(`${"=".repeat(80)}\n`);
 
     try {

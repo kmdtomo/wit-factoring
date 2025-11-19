@@ -1,9 +1,11 @@
 import { Mastra } from '@mastra/core/mastra';
 import { integratedWorkflow } from './workflows/integrated-workflow';
 
-import { createWorkflow } from '@mastra/core/workflows';
+import { createWorkflow, createStep } from '@mastra/core/workflows';
 import { z } from 'zod';
 import { phase3VerificationStep } from './workflows/phase3-verification-step';
+import { googleVisionPurchaseCollateralOcrTool } from './tools/google-vision-purchase-collateral-ocr-tool';
+import { RuntimeContext } from '@mastra/core/runtime-context';
 
 const phase3VerificationWorkflow = createWorkflow({
   id: 'phase3-verification-workflow',
@@ -18,9 +20,102 @@ const phase3VerificationWorkflow = createWorkflow({
   .then(phase3VerificationStep)
   .commit();
 
+// OCR文書分類テスト用ワークフロー
+const ocrTestStep = createStep({
+  id: 'ocr-test',
+  description: 'OCR文書分類ツールの精度確認',
+
+  inputSchema: z.object({
+    recordId: z.string().describe('KintoneレコードID'),
+  }),
+
+  outputSchema: z.object({
+    recordId: z.string(),
+    ocrResults: z.object({
+      purchaseDocuments: z.array(z.any()),
+      collateralDocuments: z.array(z.any()),
+      processingDetails: z.any(),
+      costAnalysis: z.any(),
+    }),
+  }),
+
+  execute: async ({ inputData }) => {
+    const { recordId } = inputData;
+
+    console.log(`\n${"=".repeat(80)}`);
+    console.log(`🔍 OCR文書分類テスト - recordId: ${recordId}`);
+    console.log(`${"=".repeat(80)}\n`);
+
+    const ocrResult = await googleVisionPurchaseCollateralOcrTool.execute!({
+      context: {
+        recordId,
+        purchaseFieldName: "成因証書＿添付ファイル",
+        collateralFieldName: "担保情報＿添付ファイル",
+        maxPagesPerFile: 20,
+      },
+      runtimeContext: new RuntimeContext(),
+    });
+
+    console.log(`\n━━━ OCR結果詳細 ━━━`);
+    console.log(`\n【買取書類】 ${ocrResult.purchaseDocuments.length}件`);
+    ocrResult.purchaseDocuments.forEach((doc: any, idx: number) => {
+      console.log(`\n--- 書類 ${idx + 1}: ${doc.fileName} ---`);
+      console.log(`文書種別: ${doc.documentType}`);
+      console.log(`ページ数: ${doc.pageCount}`);
+      console.log(`\n抽出された事実情報:`);
+      console.log(JSON.stringify(doc.extractedFacts, null, 2));
+      console.log(`\nOCRテキスト（最初の500文字）:`);
+      console.log(doc.text.substring(0, 500));
+      console.log(`...（全${doc.text.length}文字）`);
+    });
+
+    console.log(`\n【担保書類】 ${ocrResult.collateralDocuments.length}件`);
+    ocrResult.collateralDocuments.forEach((doc: any, idx: number) => {
+      console.log(`\n--- 書類 ${idx + 1}: ${doc.fileName} ---`);
+      console.log(`文書種別: ${doc.documentType}`);
+      console.log(`ページ数: ${doc.pageCount}`);
+      console.log(`\n抽出された事実情報:`);
+      console.log(JSON.stringify(doc.extractedFacts, null, 2));
+      console.log(`\nOCRテキスト（最初の500文字）:`);
+      console.log(doc.text.substring(0, 500));
+      console.log(`...（全${doc.text.length}文字）`);
+    });
+
+    console.log(`\n━━━ コスト分析 ━━━`);
+    console.log(`Google Vision API: $${ocrResult.costAnalysis.googleVisionCost.toFixed(4)}`);
+    console.log(`AI分類コスト: $${ocrResult.costAnalysis.classificationCost.toFixed(4)}`);
+    console.log(`総コスト: $${(ocrResult.costAnalysis.googleVisionCost + ocrResult.costAnalysis.classificationCost).toFixed(4)}`);
+
+    console.log(`\n${"=".repeat(80)}`);
+    console.log(`✅ OCR文書分類テスト完了`);
+    console.log(`${"=".repeat(80)}\n`);
+
+    return {
+      recordId,
+      ocrResults: {
+        purchaseDocuments: ocrResult.purchaseDocuments,
+        collateralDocuments: ocrResult.collateralDocuments,
+        processingDetails: ocrResult.processingDetails,
+        costAnalysis: ocrResult.costAnalysis,
+      },
+    };
+  },
+});
+
+const ocrTestWorkflow = createWorkflow({
+  id: 'ocr-test-workflow',
+  description: 'OCR文書分類ツールの精度を確認するテスト用ワークフロー',
+  inputSchema: z.object({
+    recordId: z.string(),
+  }),
+})
+  .then(ocrTestStep)
+  .commit();
+
 export const mastra = new Mastra({
   workflows: {
     integratedWorkflow,
     phase3VerificationWorkflow,
+    ocrTestWorkflow,
   },
 });

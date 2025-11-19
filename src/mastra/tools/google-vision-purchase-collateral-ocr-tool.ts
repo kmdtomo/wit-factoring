@@ -2,8 +2,12 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import axios from "axios";
 import { generateObject } from 'ai';
-import { openai } from '@ai-sdk/openai';
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { annotateImage, batchAnnotateFiles } from '../lib/google-vision-rest';
+
+const google = createGoogleGenerativeAI({
+  apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+});
 
 // 環境変数は実行時に取得するように変更
 const getKintoneConfig = () => ({
@@ -390,18 +394,20 @@ export const googleVisionPurchaseCollateralOcrTool = createTool({
       // 3. 文書分類と情報抽出の関数（汎用的・事実ベース）
       const classifyAndExtractInfo = async (document: any) => {
         try {
-          // テキストの最初の2000文字のみを使用（コスト削減）
-          const textSample = document.text.substring(0, 2000);
+          // テキストの最初の4000文字を使用（詳細な抽出のため）
+          const textSample = document.text.substring(0, 4000);
 
           // 汎用的なスキーマ：何が入っていたかの事実を記録
           const schema = z.object({
             documentType: z.string().describe("文書種別（請求書、登記情報、債権譲渡概要、名刺、契約書など、文書に記載されている内容から自由に判定）"),
-            extractedFacts: z.record(z.any()).default({}).describe("抽出された事実情報（会社名、資本金、設立年月日、代表者名、請求額、期日など、文書から読み取れる情報を柔軟に記録。ネスト構造も可能）"),
+            extractedFactsJson: z.string().describe("抽出された事実情報をJSON文字列として記録（会社名、資本金、設立年月日、代表者名、請求額、期日など、文書から読み取れる情報を柔軟に記録。ネスト構造も可能）"),
           });
 
+          console.log(`\n[文書分類] ${document.fileName} を分類中...`);
+          console.log(`[文書分類] テキストサンプル長: ${textSample.length}文字`);
+
           const result = await generateObject({
-            model: openai("gpt-4o"),
-            schema,
+            model: google("gemini-2.5-flash"),
             prompt: `以下の文書のOCRテキストを分析し、文書種別と抽出可能な情報を記録してください。
 
 【重要】
@@ -409,6 +415,8 @@ export const googleVisionPurchaseCollateralOcrTool = createTool({
 - 抽出された情報は、何が記載されていたかの「事実」を記録してください
 - 型にはめず、存在する情報を柔軟に抽出してください
 - 情報が存在しない場合は、そのフィールドを含めないでください
+- **必ず完全で有効なJSONを返してください（途中で切れないように）**
+- 明細が多い場合は、重要な項目のみを抽出してください（全明細を含める必要はありません）
 
 【登記情報に関する追加ルール（同一法人判定のための抽出強化）】
 - 「登記情報」「登記事項証明」「法人登記簿」等である場合は、以下を優先して extractedFacts に格納してください。
@@ -426,46 +434,44 @@ ${textSample}
 登記情報の場合:
 {
   "documentType": "登記情報",
-  "extractedFacts": {
-    "会社名": "株式会社〇〇",
-    "会社法人等番号": "3701-01-001616",
-    "商号": {"現商号": "城南建設株式会社", "旧商号": ["株式会社かのしき"]},
-    "名称候補": [{"名称": "城南建設株式会社", "漢字比率": 1.0}],
-    "資本金": 10000000,
-    "設立年月日": "2020年1月1日",
-    "代表者名": "山田太郎"
-  }
+  "extractedFactsJson": "{\\"会社名\\": \\"株式会社〇〇\\", \\"会社法人等番号\\": \\"3701-01-001616\\", \\"商号\\": {\\"現商号\\": \\"城南建設株式会社\\", \\"旧商号\\": [\\"株式会社かのしき\\"]}, \\"名称候補\\": [{\\"名称\\": \\"城南建設株式会社\\", \\"漢字比率\\": 1.0}], \\"資本金\\": 10000000, \\"設立年月日\\": \\"2020年1月1日\\", \\"代表者名\\": \\"山田太郎\\"}"
 }
 
 債権譲渡概要の場合:
 {
   "documentType": "債権譲渡概要",
-  "extractedFacts": {
-    "会社名": "株式会社〇〇",
-    "譲渡債権額": 5000000,
-    "譲渡日": "2024年12月1日",
-    "状態": "閉鎖" または "現在"
-  }
+  "extractedFactsJson": "{\\"会社名\\": \\"株式会社〇〇\\", \\"譲渡債権額\\": 5000000, \\"譲渡日\\": \\"2024年12月1日\\", \\"状態\\": \\"閉鎖\\"}"
 }
 
 請求書の場合:
 {
   "documentType": "請求書",
-  "extractedFacts": {
-    "請求元": "株式会社〇〇",
-    "請求先": "株式会社△△",
-    "請求額": 1000000,
-    "支払期日": "2024年12月31日"
-  }
+  "extractedFactsJson": "{\\"請求元\\": \\"株式会社〇〇\\", \\"請求先\\": \\"株式会社△△\\", \\"請求額\\": 1000000, \\"支払期日\\": \\"2024年12月31日\\"}"
 }`,
+            schema,
           });
 
           const inputCost = (result.usage?.totalTokens || 0) * 0.000003 * 0.5;
           const outputCost = (result.usage?.totalTokens || 0) * 0.000015 * 0.5;
 
+          console.log(`[文書分類] Geminiレスポンス:`, JSON.stringify(result.object, null, 2));
+
+          // JSONをパース
+          let extractedFacts = {};
+          try {
+            extractedFacts = JSON.parse(result.object.extractedFactsJson);
+            console.log(`[文書分類] パース成功:`, extractedFacts);
+          } catch (parseError) {
+            console.warn(`[文書分類] JSON解析エラー (${document.fileName}):`, parseError);
+            console.warn(`[文書分類] 受信した文字列:`, result.object.extractedFactsJson);
+            extractedFacts = {};
+          }
+
+          console.log(`[文書分類] ${document.fileName} 完了 → 種別: ${result.object.documentType}`);
+
           return {
             documentType: result.object.documentType,
-            extractedFacts: result.object.extractedFacts,
+            extractedFacts,
             classificationCost: inputCost + outputCost,
           };
         } catch (error) {
