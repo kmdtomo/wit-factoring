@@ -10,7 +10,7 @@ import { phase4ReportGenerationStep } from "./phase4-report-generation-step";
  * 統合ワークフロー（並列実行版）: Phase 1-3並列 → Phase 4
  *
  * 処理フロー:
- * 1. Phase 1-3を並列実行（branch()）:
+ * 1. Phase 1-3を並列実行（parallel()）:
  *    - Phase 1: 買取・担保情報処理（OCR → 買取検証 → 担保検証）
  *    - Phase 2: 通帳分析（OCR → 入金照合 → リスク検出）
  *    - Phase 3: 本人確認・企業実在性確認（本人確認OCR → エゴサーチ → 企業検証）

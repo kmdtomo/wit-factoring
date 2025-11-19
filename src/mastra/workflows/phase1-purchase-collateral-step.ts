@@ -52,7 +52,7 @@ export const phase1PurchaseCollateralStep = createStep({
     const { recordId } = inputData;
 
     console.log(`\n${"=".repeat(80)}`);
-    console.log(`🚀 [Phase 1/4 - 並列実行] 買取・担保情報処理開始 - recordId: ${recordId}`);
+    console.log(`🚀 [Phase 1/4] 買取・担保情報処理開始 - recordId: ${recordId}`);
     console.log(`${"=".repeat(80)}\n`);
 
     try {
