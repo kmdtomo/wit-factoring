@@ -79,17 +79,9 @@ export const phase2BankStatementStep = createStep({
             amount: z.number(),
             payeeName: z.string(),
           })),
-          pairedTransactions: z.array(z.object({
-            inbound: z.object({ date: z.string(), amount: z.number() }),
-            outbound: z.object({ date: z.string(), amount: z.number() }),
-            status: z.enum(["完済", "一部返済"]),
-          })),
-          unpairedInbound: z.array(z.object({
-            date: z.string(),
-            amount: z.number(),
-            note: z.string(),
-          })),
-          actualStatus: z.enum(["完済済み", "契約中の可能性", "要確認"]),
+          totalInbound: z.number(),
+          totalOutbound: z.number(),
+          actualStatus: z.enum(["完済済み", "一部返済", "契約中の可能性"]),
         })),
         alerts: z.array(z.object({
           type: z.enum(["複数社同時利用", "契約中複数社"]),
@@ -132,7 +124,7 @@ export const phase2BankStatementStep = createStep({
           recordId,
           mainBankFieldName: "メイン通帳＿添付ファイル",
           subBankFieldName: "", // サブ通帳は使用しない
-          maxPagesPerFile: 50,
+          maxPagesPerFile: 100,
         },
         runtimeContext: new RuntimeContext(),
       });
@@ -161,6 +153,7 @@ export const phase2BankStatementStep = createStep({
         "ビームサー", "ビームサー（カ）",
         "ペイトナー", "ペイトナー（カ）",
         "ラボル", "カ）ラボル", "labol",
+        "アクティブサポート", "カ）アクティブサポート",
         "チエンジ", "カ）チエンジ",
         "セイワビジネル", "セイワビジネル（カ）",
         "ジャパンパートナーズ",
@@ -199,6 +192,11 @@ export const phase2BankStatementStep = createStep({
         "FREENANCE", "フリーナンス",
         "GMOクリエイターズネットワーク",
         "ビートレーディング", "ビートレ",
+        // ビートレーディングのOCR表記ゆれ対応
+        "ビートレーデインク", "ビートレーディンク", "ビートレーデイン",
+        "カ)ビートレーディンク", "カ)ビートレーデインク", "カ)ビートレーデイン",
+        "カ) ビートレーディンク", "カ) ビートレーデインク", "カ) ビートレーデイン",
+        "カ) ビートレーデ インク",
         "MSFJ", "エムエスエフジェイ",
         "No.1", "ナンバーワン",
       ];
@@ -294,6 +292,13 @@ ${gamblingKeywords.map((k, i) => `${i + 1}. ${k}`).join('\n')}
 # タスク
 1. 全取引を抽出（日付、金額、振込元/先、摘要。入金=プラス、出金=マイナス）
 
+**【重要】入金/出金の判定方法:**
+- 通帳アプリのOCRでは明示的な+/-記号がないことが多い
+- **残高の増減で判定すること**:
+  - 前の取引より残高が増加 → 入金（プラス）
+  - 前の取引より残高が減少 → 出金（マイナス）
+- 例: 残高 ¥97,212 → 取引後 ¥649,065 なら、差額 ¥551,853 が入金額
+
 2. 担保企業からの入金照合
    **企業名マッチングの原則:**
    - 金額を最優先（期待値±1,000円以内なら企業名は部分一致でOK）
@@ -358,34 +363,37 @@ ${gamblingKeywords.map((k, i) => `${i + 1}. ${k}`).join('\n')}
    キーワード「マルハン」と完全一致
    → {"date": "09-05", "amount": -20000, "destination": "マルハン", "keyword": "マルハン"}
 
-4. 他社ファクタリング取引分析（詳細版）
+4. 他社ファクタリング取引分析（シンプル版）
 
 【検出フェーズ - 振込名優先】
 - **振込依頼人名（振込名フィールド）**に業者名が含まれる場合のみ検出
-  - 入金取引: 振込元（振込依頼人名）に業者名が含まれる
-  - 出金取引: 振込先（振込依頼人名）に業者名が含まれる
+  - 入金取引: 振込元（振込依頼人名）に業者名が含まれる → 金額は**プラス**
+  - 出金取引: 振込先（振込依頼人名）に業者名が含まれる → 金額は**マイナス**
 - **摘要欄のみ**に業者名が含まれる場合は検出しない
 - 除外: クレカ/決済代行経由（セゾン、アメックス、SMBC、GMOペイメント等）
 - **重要**: 「マネーフォワード」単体は除外、「マネーフォワードケッサイ」「カ）ラボル」「ラボル」は検出
 
-【ペアリングフェーズ】
-各業者について以下を分析:
-1. 入金取引を時系列で取得
-2. 各入金に対して、その後の出金で金額が近い取引を検索
-3. ペアリング条件:
-   - 入金日 < 出金日（時系列）
-   - 出金金額が入金金額の90-115%の範囲内（手数料込み）
-   - 同一業者
+【入金/出金の判定 - 残高ベース】
+- **残高の増減から入金/出金を判定すること**（OCRに+/-がない場合が多い）
+- 残高増加 → 入金（業者からの借入）
+- 残高減少 → 出金（業者への返済）
 
-【判定ルール】
-- ✅ 入金・出金ペア成立 → status="完済", note=""
-- ⚠️ 入金のみで出金なし（60日以上経過） → status="契約中の可能性", note="申込者に契約状況を確認してください"
-- ⚠️ 入金のみで出金なし（60日未満） → status="要確認", note="返済期日前の可能性あり。申込者に確認してください"
-- ✅ 出金のみで入金なし → status="完済済み", note="入金が通帳期間外"
+【集計フェーズ - ペアリング不要】
+各業者について以下を**単純集計**:
+1. 入金合計（totalInbound）: その業者からの入金（残高増加）の合計
+2. 出金合計（totalOutbound）: その業者への出金（残高減少）の絶対値の合計
+
+**ペアリングは不要。個別の取引を1対1で対応付けしない。**
+
+【判定ルール - シンプル】
+- ✅ 出金合計 ≧ 入金合計 → actualStatus="完済済み"
+- ⚠️ 出金合計 < 入金合計 かつ 出金あり → actualStatus="一部返済"
+- ⚠️ 入金のみで出金なし → actualStatus="契約中の可能性"
+- ✅ 出金のみで入金なし → actualStatus="完済済み"（入金が通帳期間外）
 
 【アラート条件】
 - 同月（±15日以内）に2社以上から入金 → alert type="複数社同時利用"
-- 未完済（契約中の可能性）の業者が2社以上 → alert type="契約中複数社"
+- 未完済（契約中の可能性 or 一部返済）の業者が2社以上 → alert type="契約中複数社"
 
 ---
 
@@ -469,23 +477,9 @@ JSON形式で出力してください。`;
                 amount: z.number(),
                 payeeName: z.string(),
               })).describe("この業者への出金取引（申込者→業者）"),
-              pairedTransactions: z.array(z.object({
-                inbound: z.object({
-                  date: z.string(),
-                  amount: z.number(),
-                }),
-                outbound: z.object({
-                  date: z.string(),
-                  amount: z.number(),
-                }),
-                status: z.enum(["完済", "一部返済"]),
-              })).describe("ペアリングできた入出金（完済済み）"),
-              unpairedInbound: z.array(z.object({
-                date: z.string(),
-                amount: z.number(),
-                note: z.string().describe("確認事項メモ"),
-              })).describe("ペアリングできない入金（契約中の可能性）"),
-              actualStatus: z.enum(["完済済み", "契約中の可能性", "要確認"]),
+              totalInbound: z.number().describe("入金合計額（借入総額）"),
+              totalOutbound: z.number().describe("出金合計額（返済総額）"),
+              actualStatus: z.enum(["完済済み", "一部返済", "契約中の可能性"]),
             })).describe("業者ごとの取引分析"),
             alerts: z.array(z.object({
               type: z.enum(["複数社同時利用", "契約中複数社"]),
@@ -640,22 +634,9 @@ JSON形式で出力してください。`;
               console.log(`  📤 出金: なし`);
             }
 
-            // ペアリング結果
-            if (company.pairedTransactions.length > 0) {
-              console.log(`  ✅ 完済取引: ${company.pairedTransactions.length}ペア`);
-              company.pairedTransactions.forEach((pair: any) => {
-                console.log(`     入金 ${pair.inbound.date} ¥${pair.inbound.amount.toLocaleString()} → 出金 ${pair.outbound.date} ¥${pair.outbound.amount.toLocaleString()} (${pair.status})`);
-              });
-            }
-
-            // 未ペア入金
-            if (company.unpairedInbound.length > 0) {
-              console.log(`  ⚠️ 未返済入金: ${company.unpairedInbound.length}件`);
-              company.unpairedInbound.forEach((tx: any) => {
-                console.log(`     ${tx.date}: ¥${tx.amount.toLocaleString()}`);
-                console.log(`     📝 ${tx.note}`);
-              });
-            }
+            // 集計結果
+            console.log(`  💰 入金合計（借入）: ¥${(company.totalInbound || 0).toLocaleString()}`);
+            console.log(`  💸 出金合計（返済）: ¥${(company.totalOutbound || 0).toLocaleString()}`);
 
             // 状態
             const statusIcon = company.actualStatus === "完済済み" ? "✅" : "⚠️";

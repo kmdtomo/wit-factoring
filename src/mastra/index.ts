@@ -5,6 +5,7 @@ import { createWorkflow, createStep } from '@mastra/core/workflows';
 import { z } from 'zod';
 import { phase3VerificationStep } from './workflows/phase3-verification-step';
 import { googleVisionPurchaseCollateralOcrTool } from './tools/google-vision-purchase-collateral-ocr-tool';
+import { googleVisionBankStatementOcrToolImproved } from './tools/google-vision-bank-statement-ocr-tool-improved';
 import { RuntimeContext } from '@mastra/core/runtime-context';
 
 const phase3VerificationWorkflow = createWorkflow({
@@ -108,8 +109,90 @@ const ocrTestWorkflow = createWorkflow({
   inputSchema: z.object({
     recordId: z.string(),
   }),
+  outputSchema: z.any(),
 })
   .then(ocrTestStep)
+  .commit();
+
+// 通帳OCRテスト用ステップ
+const bankStatementOcrTestStep = createStep({
+  id: 'bank-statement-ocr-test',
+  description: '通帳OCRの生テキストを確認するテスト',
+
+  inputSchema: z.object({
+    recordId: z.string().describe('KintoneレコードID'),
+  }),
+
+  outputSchema: z.object({
+    recordId: z.string(),
+    success: z.boolean(),
+    mainBankDocuments: z.array(z.object({
+      fileName: z.string(),
+      text: z.string(),
+      pageCount: z.number(),
+    })),
+    error: z.string().optional(),
+  }),
+
+  execute: async ({ inputData }) => {
+    const { recordId } = inputData;
+
+    console.log(`\n${"=".repeat(80)}`);
+    console.log(`🏦 通帳OCRテスト - recordId: ${recordId}`);
+    console.log(`${"=".repeat(80)}\n`);
+
+    const ocrResult = await googleVisionBankStatementOcrToolImproved.execute!({
+      context: {
+        recordId,
+        mainBankFieldName: 'メイン通帳＿添付ファイル',
+        subBankFieldName: '',
+        maxPagesPerFile: 100,
+      },
+      runtimeContext: new RuntimeContext(),
+    });
+
+    console.log(`\n📄 OCR結果:`);
+    console.log(`  - 成功: ${ocrResult.success}`);
+    console.log(`  - ファイル数: ${ocrResult.mainBankDocuments.length}`);
+
+    // 各ファイルのOCRテキストを表示
+    ocrResult.mainBankDocuments.forEach((doc, idx) => {
+      console.log(`\n${"─".repeat(60)}`);
+      console.log(`📑 ファイル ${idx + 1}: ${doc.fileName}`);
+      console.log(`   ページ数: ${doc.pageCount}`);
+      console.log(`   文字数: ${doc.text.length}`);
+      console.log(`${"─".repeat(60)}`);
+      console.log(`【OCRテキスト（生データ）】`);
+      console.log(doc.text);
+      console.log(`${"─".repeat(60)}\n`);
+    });
+
+    console.log(`\n✅ 通帳OCRテスト完了`);
+    console.log(`${"=".repeat(80)}\n`);
+
+    return {
+      recordId,
+      success: ocrResult.success,
+      mainBankDocuments: ocrResult.mainBankDocuments.map(doc => ({
+        fileName: doc.fileName,
+        text: doc.text,
+        pageCount: doc.pageCount,
+      })),
+      error: ocrResult.error,
+    };
+  },
+});
+
+// 通帳OCRテスト用ワークフロー
+const bankStatementOcrTestWorkflow = createWorkflow({
+  id: 'bank-statement-ocr-test-workflow',
+  description: '通帳OCRの生テキストを確認するテスト用ワークフロー',
+  inputSchema: z.object({
+    recordId: z.string(),
+  }),
+  outputSchema: z.any(),
+})
+  .then(bankStatementOcrTestStep)
   .commit();
 
 export const mastra = new Mastra({
@@ -117,5 +200,6 @@ export const mastra = new Mastra({
     integratedWorkflow,
     phase3VerificationWorkflow,
     ocrTestWorkflow,
+    bankStatementOcrTestWorkflow,
   },
 });
