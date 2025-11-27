@@ -625,23 +625,16 @@ function formatPhase2Data(phase2: any): string {
 
     // 業者別分析
     if (factoringAnalysis.companyAnalysis && factoringAnalysis.companyAnalysis.length > 0) {
-      output += '| 業者名 | 入金 | 出金 | 状態 | 確認事項 |\n';
-      output += '|--------|------|------|------|----------|\n';
+      output += '| 業者名 | 借入合計 | 返済合計 | 状態 |\n';
+      output += '|--------|----------|----------|------|\n';
 
       factoringAnalysis.companyAnalysis.forEach((company: any) => {
-        const inboundCount = company.inboundTransactions.length;
-        const outboundCount = company.outboundTransactions.length;
-        const inboundTotal = company.inboundTransactions.reduce((sum: number, tx: any) => sum + tx.amount, 0);
-        const outboundTotal = company.outboundTransactions.reduce((sum: number, tx: any) => sum + tx.amount, 0);
+        const inboundTotal = company.totalInbound || company.inboundTransactions?.reduce((sum: number, tx: any) => sum + tx.amount, 0) || 0;
+        const outboundTotal = company.totalOutbound || company.outboundTransactions?.reduce((sum: number, tx: any) => sum + tx.amount, 0) || 0;
 
         const statusIcon = company.actualStatus === '完済済み' ? '✅' : '⚠️';
 
-        let note = '';
-        if (company.unpairedInbound && company.unpairedInbound.length > 0) {
-          note = company.unpairedInbound[0].note;
-        }
-
-        output += `| ${company.companyName} | ${inboundCount}件 (¥${inboundTotal.toLocaleString()}) | ${outboundCount}件 (¥${outboundTotal.toLocaleString()}) | ${statusIcon} ${company.actualStatus} | ${note} |\n`;
+        output += `| ${company.companyName} | ¥${inboundTotal.toLocaleString()} | ¥${outboundTotal.toLocaleString()} | ${statusIcon} ${company.actualStatus} |\n`;
       });
       output += '\n';
     }
