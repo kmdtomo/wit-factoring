@@ -11,6 +11,37 @@ const google = createGoogleGenerativeAI({
 });
 
 /**
+ * 汎用的にオブジェクトからキーを探す関数
+ * パターン配列で指定されたキー名を完全一致・部分一致で探し、ネストされたオブジェクトも再帰的に検索
+ */
+function findValue(obj: any, patterns: string[]): any {
+  if (!obj || typeof obj !== 'object') return null;
+
+  // まず直接キーを探す
+  for (const pattern of patterns) {
+    // 完全一致
+    if (obj[pattern] !== undefined) return obj[pattern];
+
+    // 部分一致（キーにpatternが含まれる）
+    for (const key of Object.keys(obj)) {
+      if (key.includes(pattern) || pattern.includes(key)) {
+        return obj[key];
+      }
+    }
+  }
+
+  // ネストされたオブジェクトも探す
+  for (const key of Object.keys(obj)) {
+    if (typeof obj[key] === 'object' && obj[key] !== null && !Array.isArray(obj[key])) {
+      const found = findValue(obj[key], patterns);
+      if (found) return found;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Phase 4: 審査レポート生成ステップ（新バージョン）
  *
  * 処理フロー:
@@ -478,58 +509,74 @@ ${formatApplicantSignals(inputData.applicantSignals)}
 function formatPhase1Data(phase1: any): string {
   let output = '';
 
-  // 買取書類
-  output += '#### 買取書類\n\n';
-  if (phase1.purchaseDocuments && phase1.purchaseDocuments.length > 0) {
-    phase1.purchaseDocuments.forEach((doc: any) => {
+  // 全書類を結合（purchaseDocumentsとcollateralDocumentsの両方を処理）
+  const allDocuments = [
+    ...(phase1.purchaseDocuments || []),
+    ...(phase1.collateralDocuments || []),
+  ];
+
+  // 書類を種別ごとに分類
+  const invoiceDocuments: any[] = [];
+  const registryDocuments: any[] = [];
+  const otherDocuments: any[] = [];
+
+  allDocuments.forEach((doc: any) => {
+    const docType = (doc.documentType || '').toLowerCase();
+    if (docType.includes('請求') || docType.includes('注文') || docType.includes('invoice')) {
+      invoiceDocuments.push(doc);
+    } else if (docType.includes('登記') || docType.includes('謄本') || docType.includes('registry')) {
+      registryDocuments.push(doc);
+    } else {
+      otherDocuments.push(doc);
+    }
+  });
+
+  // 請求書・注文書
+  output += '#### 買取書類（請求書・注文書）\n\n';
+  if (invoiceDocuments.length > 0) {
+    invoiceDocuments.forEach((doc: any) => {
       output += `**📄 ${doc.fileName}**\n`;
       output += `- 文書タイプ: ${doc.documentType}\n`;
 
       const facts = doc.extractedFacts || {};
 
-      // 新しいネスト構造（請求書情報.請求元.名称）と古い構造（請求元）の両方に対応
-      const 請求元 = facts.請求書情報?.請求元?.名称 || facts.請求元;
-      const 請求先 = facts.請求書情報?.請求先?.名称 || facts.請求先;
-      const 請求額 = facts.請求書情報?.合計請求金額 || facts.請求額;
-      const 請求日 = facts.請求書情報?.発行日 || facts.請求日;
-      const 支払期日 = facts.支払期日;
-      const 業務内容 = facts.業務内容;
-      const 工期 = facts.発注書情報?.工期 || facts.工期;
-      const 振込先 = facts.請求書情報?.振込先 ?
-        `${facts.請求書情報.振込先.銀行名} ${facts.請求書情報.振込先.支店名} ${facts.請求書情報.振込先.口座種別} ${facts.請求書情報.振込先.口座番号}` :
-        facts.振込先;
+      // 汎用的に請求書情報を抽出
+      const 請求元 = findValue(facts, ['請求元', '請求書情報.請求元.会社名', '請求書情報.請求元.名称']);
+      const 請求先 = findValue(facts, ['請求先', '請求書情報.請求先.会社名', '請求書情報.請求先.名称', '注文書情報.発注者.会社名']);
+      const 請求額 = findValue(facts, ['合計金額', '請求額', '合計請求金額', '請求書情報.合計金額']);
+      const 請求日 = findValue(facts, ['請求日', '発行日', '請求書情報.請求日']);
+      const 支払期日 = findValue(facts, ['支払期限', '支払期日', '請求書情報.支払期限']);
+      const 振込先 = findValue(facts, ['振込先', '請求書情報.振込先']);
 
-      if (請求元) output += `- 請求元: ${請求元}\n`;
-      if (請求先) output += `- 請求先: ${請求先}\n`;
-      if (請求額) output += `- 請求額: ¥${typeof 請求額 === 'number' ? 請求額.toLocaleString() : 請求額}\n`;
+      if (請求元) output += `- 請求元: ${typeof 請求元 === 'object' ? JSON.stringify(請求元) : 請求元}\n`;
+      if (請求先) output += `- 請求先: ${typeof 請求先 === 'object' ? JSON.stringify(請求先) : 請求先}\n`;
+      if (請求額) output += `- 請求額: ${typeof 請求額 === 'number' ? `¥${請求額.toLocaleString()}` : 請求額}\n`;
       if (請求日) output += `- 請求日: ${請求日}\n`;
       if (支払期日) output += `- 支払期日: ${支払期日}\n`;
-      if (業務内容) output += `- 業務内容: ${業務内容}\n`;
-      if (工期) output += `- 工期: ${工期}\n`;
-      if (振込先) output += `- 振込先: ${振込先}\n`;
+      if (振込先) output += `- 振込先: ${typeof 振込先 === 'object' ? JSON.stringify(振込先) : 振込先}\n`;
 
       output += '\n';
     });
   } else {
-    output += '⚠️ 買取書類なし\n\n';
+    output += '⚠️ 請求書・注文書なし\n\n';
   }
 
-  // 担保書類
-  output += '#### 担保書類\n\n';
-  if (phase1.collateralDocuments && phase1.collateralDocuments.length > 0) {
-    phase1.collateralDocuments.forEach((doc: any) => {
+  // 登記情報
+  output += '#### 登記情報\n\n';
+  if (registryDocuments.length > 0) {
+    registryDocuments.forEach((doc: any) => {
       output += `**📄 ${doc.fileName}**\n`;
       output += `- 文書タイプ: ${doc.documentType}\n`;
 
       const facts = doc.extractedFacts || {};
 
-      // 登記情報の新しい構造に対応
-      const 会社名 = facts.商号?.現商号 || facts.会社名;
-      const 資本金 = facts.資本金の額 || facts.資本金;
-      const 設立年月日 = facts.会社成立の年月日 || facts.設立年月日 || facts.設立;
-      const 代表取締役 = facts.代表者名 || facts.代表取締役;
-      const 本店所在地 = facts.本店 || facts.本店所在地;
-      const 会社法人等番号 = facts.会社法人等番号;
+      // 登記情報の柔軟な抽出（トップレベルのfindValue関数を使用）
+      const 会社名 = facts.商号?.現商号 || findValue(facts, ['会社名', '商号', '法人名']);
+      const 資本金 = findValue(facts, ['資本金の額', '資本金', '資本']);
+      const 設立年月日 = findValue(facts, ['会社成立の年月日', '会社成立', '設立年月日', '設立日', '設立']);
+      const 代表取締役 = findValue(facts, ['代表者名', '代表取締役', '代表者', '代表']);
+      const 本店所在地 = findValue(facts, ['本店', '本店所在地', '所在地', '住所']);
+      const 会社法人等番号 = findValue(facts, ['会社法人等番号', '法人番号']);
 
       if (会社名) output += `- 会社名: ${会社名}\n`;
       if (会社法人等番号) output += `- 会社法人等番号: ${会社法人等番号}\n`;
@@ -541,7 +588,18 @@ function formatPhase1Data(phase1: any): string {
       output += '\n';
     });
   } else {
-    output += '⚠️ 担保書類なし\n\n';
+    output += '⚠️ 登記情報なし\n\n';
+  }
+
+  // その他の書類
+  if (otherDocuments.length > 0) {
+    output += '#### その他の書類\n\n';
+    otherDocuments.forEach((doc: any) => {
+      output += `**📄 ${doc.fileName}**\n`;
+      output += `- 文書タイプ: ${doc.documentType}\n`;
+      output += `- 抽出情報: ${JSON.stringify(doc.extractedFacts || {}, null, 2)}\n`;
+      output += '\n';
+    });
   }
 
   // 買取検証結果

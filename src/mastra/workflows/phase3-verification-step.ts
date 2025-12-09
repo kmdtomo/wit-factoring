@@ -505,8 +505,6 @@ export const phase3VerificationStep = createStep({
           verificationUrl: null,
           verificationSource: "未確認" as const,
           businessDescription: null,
-          capital: null,
-          established: null,
         };
       }
 
@@ -519,8 +517,6 @@ export const phase3VerificationStep = createStep({
         verificationUrl: analysis.verificationUrl,
         verificationSource: analysis.verificationSource || "未確認",
         businessDescription: analysis.businessDescription,
-        capital: analysis.capital,
-        established: analysis.established,
       };
     });
 
@@ -1075,8 +1071,6 @@ async function analyzeStage2FullContent(
       verificationUrl?: string | null;
       verificationSource: "公式サイト" | "第三者サイト" | "未確認";
       businessDescription?: string | null;
-      capital?: string | null;
-      established?: string | null;
       reason?: string;
     }>;
   };
@@ -1368,8 +1362,6 @@ ${companiesInfo}
             verificationUrl: z.string().nullable().optional(),
             verificationSource: z.enum(["公式サイト", "第三者サイト", "未確認"]),
             businessDescription: z.string().nullable().optional(),
-            capital: z.string().nullable().optional(),
-            established: z.string().nullable().optional(),
             reason: z.string().optional(),
           })),
         }),
@@ -1422,8 +1414,6 @@ ${companiesInfo}
           verificationUrl: null,
           verificationSource: "未確認" as const,
           businessDescription: null,
-          capital: null,
-          established: null,
         })),
       },
     };
@@ -1785,12 +1775,6 @@ function printCompanyVerificationResultSimple(result: any): void {
 
     if (result.businessDescription) {
       console.log(`     事業内容: ${result.businessDescription}`);
-    }
-    if (result.capital) {
-      console.log(`     資本金: ${result.capital}`);
-    }
-    if (result.established) {
-      console.log(`     設立: ${result.established}`);
     }
   } else {
     console.log(`  ⚠️ ${result.companyName}: 確認不十分`);
